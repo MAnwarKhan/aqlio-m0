@@ -22,6 +22,7 @@ dev = [
 pilot = [
   "alembic==1.16.5",
   "boto3==1.40.21",
+  "openai==1.102.0",
   "psycopg[binary]==3.2.9",
   "sqlalchemy==2.0.43",
 ]
@@ -32,6 +33,7 @@ include = ["app*"]
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
+markers = ["live_ai: opt-in paid provider tests guarded by call and cost caps"]
 
 [tool.ruff]
 target-version = "py312"

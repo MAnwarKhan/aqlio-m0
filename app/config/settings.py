@@ -21,6 +21,16 @@ def _positive_int(name: str, default: int) -> int:
     return value
 
 
+def _nonnegative_float(name: str, default: float) -> float:
+    try:
+        value = float(os.getenv(name, str(default)))
+    except ValueError as exc:
+        raise SettingsError(f"{name} must be a number.") from exc
+    if value < 0:
+        raise SettingsError(f"{name} must not be negative.")
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     """Runtime settings safe to pass to application composition code."""
@@ -57,6 +67,16 @@ class Settings:
     admin_emails: frozenset[str] = frozenset()
     openai_generation_model: str | None = None
     openai_embedding_model: str | None = None
+    openai_api_key: str | None = None
+    ai_timeout_seconds: int = 30
+    ai_max_retries: int = 2
+    generation_input_cost_per_million: float = 0.0
+    generation_output_cost_per_million: float = 0.0
+    embedding_input_cost_per_million: float = 0.0
+    live_ai_tests_enabled: bool = False
+    live_ai_test_max_calls: int = 4
+    live_ai_test_max_estimated_cost: float = 0.10
+    chunk_max_words: int = 90
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -102,6 +122,24 @@ class Settings:
             ),
             openai_generation_model=os.getenv("OPENAI_GENERATION_MODEL"),
             openai_embedding_model=os.getenv("OPENAI_EMBEDDING_MODEL"),
+            openai_api_key=os.getenv("OPENAI_API_KEY"),
+            ai_timeout_seconds=_positive_int("AI_TIMEOUT_SECONDS", 30),
+            ai_max_retries=int(os.getenv("AI_MAX_RETRIES", "2")),
+            generation_input_cost_per_million=_nonnegative_float(
+                "OPENAI_GENERATION_INPUT_COST_PER_MILLION", 0.0
+            ),
+            generation_output_cost_per_million=_nonnegative_float(
+                "OPENAI_GENERATION_OUTPUT_COST_PER_MILLION", 0.0
+            ),
+            embedding_input_cost_per_million=_nonnegative_float(
+                "OPENAI_EMBEDDING_INPUT_COST_PER_MILLION", 0.0
+            ),
+            live_ai_tests_enabled=os.getenv("LIVE_AI_TESTS_ENABLED", "false").lower() == "true",
+            live_ai_test_max_calls=_positive_int("LIVE_AI_TEST_MAX_CALLS", 4),
+            live_ai_test_max_estimated_cost=_nonnegative_float(
+                "LIVE_AI_TEST_MAX_ESTIMATED_COST", 0.10
+            ),
+            chunk_max_words=_positive_int("DOCUMENT_CHUNK_MAX_WORDS", 90),
         )
         settings.validate()
         return settings
@@ -111,6 +149,18 @@ class Settings:
             raise SettingsError("AQLIO_AUTH_MODE must be development or oidc.")
         if self.ai_mode not in {"fake", "managed"}:
             raise SettingsError("AQLIO_AI_MODE must be fake or managed.")
+        if self.ai_max_retries < 0:
+            raise SettingsError("AI_MAX_RETRIES must not be negative.")
+        if self.ai_mode == "managed":
+            managed_required = {
+                "OPENAI_API_KEY": self.openai_api_key,
+                "OPENAI_GENERATION_MODEL": self.openai_generation_model,
+                "OPENAI_EMBEDDING_MODEL": self.openai_embedding_model,
+            }
+            missing_managed = [name for name, value in managed_required.items() if not value]
+            if missing_managed:
+                names = ", ".join(sorted(missing_managed))
+                raise SettingsError(f"Missing required managed AI settings: {names}.")
         if not self.allowed_file_types or not self.allowed_file_types <= {"pdf", "docx", "txt"}:
             raise SettingsError("ALLOWED_FILE_TYPES may contain only pdf, docx, and txt.")
         if self.persistence_mode not in {"in_memory", "sqlalchemy"}:
@@ -134,9 +184,6 @@ class Settings:
                 raise SettingsError("Pilot persistence must use the durable database adapter.")
             if self.storage_mode != "s3":
                 raise SettingsError("Pilot document storage must use private storage.")
-            if self.ai_mode == "managed":
-                required["OPENAI_GENERATION_MODEL"] = self.openai_generation_model
-                required["OPENAI_EMBEDDING_MODEL"] = self.openai_embedding_model
             missing = [name for name, value in required.items() if not value]
             if missing:
                 missing_names = ", ".join(sorted(missing))

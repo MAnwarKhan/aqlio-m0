@@ -196,6 +196,11 @@ class UsageEventRow(Base):
     request_units: Mapped[int] = mapped_column(Integer)
     estimated_cost: Mapped[float] = mapped_column(Float)
     correlation_id: Mapped[str] = mapped_column(String(64), index=True)
+    output_units: Mapped[int] = mapped_column(Integer, default=0)
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    error_category: Mapped[str | None] = mapped_column(String(80))
+    cost_is_estimated: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
 class UsageAllowanceRow(Base):

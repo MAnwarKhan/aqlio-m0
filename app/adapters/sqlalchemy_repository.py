@@ -362,6 +362,11 @@ class SQLAlchemyM0Repository:
                     request_units=event.request_units,
                     estimated_cost=event.estimated_cost,
                     correlation_id=event.correlation_id,
+                    output_units=event.output_units,
+                    latency_ms=event.latency_ms,
+                    retry_count=event.retry_count,
+                    error_category=event.error_category,
+                    cost_is_estimated=event.cost_is_estimated,
                 )
             )
             self._finish(session)
@@ -661,4 +666,9 @@ class SQLAlchemyM0Repository:
             row.request_units,
             row.estimated_cost,
             row.correlation_id,
+            row.output_units,
+            row.latency_ms,
+            row.retry_count,
+            row.error_category,
+            row.cost_is_estimated,
         )

@@ -55,7 +55,14 @@ from app.ports import (
     RateLimitPort,
     StoragePort,
 )
-from app.ports.contracts import Citation, GenerationRequest, RetrievedContext
+from app.ports.contracts import (
+    Citation,
+    GenerationRequest,
+    GenerationResponse,
+    ProviderCallError,
+    ProviderUsage,
+    RetrievedContext,
+)
 
 _STOPWORDS = {
     "a",
@@ -290,7 +297,7 @@ class M0Service:
             self.repository.save_project(project)
             self._lifecycle(project.id, "DOCUMENT_PREPARED", {"asset_id": asset.id})
             return asset
-        except PreparationError as exc:
+        except (PreparationError, AllowanceExceeded) as exc:
             asset.status = AssetStatus.FAILED
             asset.participant_message = str(exc)
             self.repository.save_asset(asset)
@@ -309,16 +316,30 @@ class M0Service:
         if project.current_version_id is None or project.prepared_document_count < 1:
             raise NotReadyError("Prepare at least one document before testing your assistant.")
         correlation_id = self.ids.new_id()
-        allowance = self.repository.get_daily_allowance(user.id)
-        effective_allowance = allowance or self.settings.daily_ai_request_allowance
-        if self.repository.usage_count_for_user(user.id) >= effective_allowance:
+        if not self._has_allowance(user.id):
             self._usage(project, correlation_id, "REJECTED")
             raise AllowanceExceeded(
                 "You've reached your Aqlio AI usage allowance. Please try again after it resets."
             )
         contexts = self._retrieve(project, clean_question)
-        response = self.generation.generate(GenerationRequest(clean_question, contexts))
-        self._usage(project, correlation_id, "SUCCEEDED")
+        if not contexts:
+            response = GenerationResponse(
+                "I couldn't find enough information in your documents to answer that confidently.",
+                (),
+                True,
+            )
+        else:
+            try:
+                response = self.generation.generate(GenerationRequest(clean_question, contexts))
+            except ProviderCallError as exc:
+                self._provider_failure(project, correlation_id, "TEST_ASSISTANT", exc)
+                raise
+        self._usage(
+            project,
+            correlation_id,
+            "ABSTAINED" if not contexts else "SUCCEEDED",
+            usage=response.usage,
+        )
         if guided and not response.abstained:
             test = GuidedTest(
                 id=self.ids.new_id(),
@@ -433,6 +454,60 @@ class M0Service:
             raise ShareAccessError("This assistant link is invalid or no longer available.")
         return self._publication_view(publication, link.visibility)
 
+    def ask_shared(self, token: str, question: str) -> Answer:
+        token_hash = self._token_hash(token)
+        self._limit(token_hash, "shared_access", self.settings.shared_access_rate_limit)
+        link = self.repository.find_share_link_by_hash(token_hash)
+        if link is None or link.visibility != PublicationVisibility.LINK_ONLY:
+            raise ShareAccessError("This assistant link is invalid or no longer available.")
+        publication = self.repository.get_publication(link.publication_id)
+        if publication is None:
+            raise ShareAccessError("This assistant link is invalid or no longer available.")
+        clean_question = " ".join(question.split())
+        if not clean_question:
+            raise ValidationError("Enter a question to ask this assistant.")
+        correlation_id = self.ids.new_id()
+        if not self._has_allowance(publication.owner_user_id):
+            self._save_usage(
+                publication.owner_user_id,
+                publication.workspace_id,
+                publication.project_id,
+                correlation_id,
+                "REJECTED",
+                operation="SHARED_ASSISTANT",
+            )
+            raise AllowanceExceeded("This assistant is temporarily unavailable. Please try later.")
+        contexts = self._retrieve_publication(publication, clean_question)
+        if not contexts:
+            return Answer(
+                "I couldn't find enough information in the documents to answer that confidently.",
+                (),
+                True,
+                correlation_id,
+            )
+        try:
+            response = self.generation.generate(GenerationRequest(clean_question, contexts))
+        except ProviderCallError as exc:
+            self._save_provider_failure(
+                publication.owner_user_id,
+                publication.workspace_id,
+                publication.project_id,
+                correlation_id,
+                "SHARED_ASSISTANT",
+                exc,
+            )
+            raise
+        self._save_usage(
+            publication.owner_user_id,
+            publication.workspace_id,
+            publication.project_id,
+            correlation_id,
+            "SUCCEEDED",
+            operation="SHARED_ASSISTANT",
+            usage=response.usage,
+        )
+        return Answer(response.answer, response.citations, response.abstained, correlation_id)
+
     @transactional
     def revoke_sharing(self, publication_id: str) -> None:
         publication = self._owned_publication(publication_id)
@@ -494,11 +569,39 @@ class M0Service:
         )
         self.repository.save_version(version)
         for asset in ready_assets:
-            raw_chunks = chunk_text(asset.normalized_text or "")
-            vectors = self.embedding.embed(raw_chunks)
+            raw_chunks = chunk_text(
+                asset.normalized_text or "", max_words=self.settings.chunk_max_words
+            )
+            correlation_id = self.ids.new_id()
+            if self.settings.ai_mode == "managed" and not self._has_allowance(
+                self.auth.current_user().id
+            ):
+                self._usage(project, correlation_id, "REJECTED", operation="EMBED_DOCUMENT")
+                raise AllowanceExceeded(
+                    "You've reached your Aqlio AI usage allowance. "
+                    "Please try again after it resets."
+                )
+            try:
+                embedding_response = self.embedding.embed(raw_chunks)
+            except ProviderCallError as exc:
+                self._provider_failure(project, correlation_id, "EMBED_DOCUMENT", exc)
+                raise PreparationError(
+                    "We couldn't prepare this document right now. Please try again."
+                ) from exc
+            vectors = embedding_response.vectors
+            if embedding_response.usage is not None:
+                self._usage(
+                    project,
+                    correlation_id,
+                    "SUCCEEDED",
+                    operation="EMBED_DOCUMENT",
+                    usage=embedding_response.usage,
+                )
             chunks = [
                 DocumentChunk(
-                    id=self.ids.new_id(),
+                    id=hashlib.sha256(
+                        f"{version.id}:{asset.id}:{index}:{text}".encode()
+                    ).hexdigest(),
                     workspace_id=project.workspace_id,
                     project_id=project.id,
                     project_version_id=version.id,
@@ -539,6 +642,35 @@ class M0Service:
             for _score, chunk in scored[:3]
         ]
 
+    def _retrieve_publication(
+        self, publication: Publication, question: str
+    ) -> list[RetrievedContext]:
+        query_terms = {
+            term
+            for term in re.findall(r"[a-z0-9]+", question.lower())
+            if len(term) > 2 and term not in _STOPWORDS
+        }
+        safe_texts = set(
+            remove_untrusted_instruction_chunks([chunk.text for chunk in publication.chunks])
+        )
+        scored = []
+        for chunk in publication.chunks:
+            if chunk.text not in safe_texts:
+                continue
+            score = len(query_terms & set(re.findall(r"[a-z0-9]+", chunk.text.lower())))
+            if score:
+                scored.append((score, chunk))
+        scored.sort(key=lambda item: (-item[0], item[1].source_name, item[1].position))
+        return [
+            RetrievedContext(
+                chunk.asset_id,
+                chunk.source_name,
+                f"published:{chunk.asset_id}:{chunk.position}",
+                chunk.text,
+            )
+            for _score, chunk in scored[:3]
+        ]
+
     def _publication_view(
         self, publication: Publication, visibility: PublicationVisibility
     ) -> PublishedAssistant:
@@ -550,24 +682,109 @@ class M0Service:
             tuple(dict.fromkeys(chunk.source_name for chunk in publication.chunks)),
         )
 
-    def _usage(self, project: Project, correlation_id: str, status: str) -> None:
+    def _usage(
+        self,
+        project: Project,
+        correlation_id: str,
+        status: str,
+        *,
+        operation: str = "TEST_ASSISTANT",
+        usage: ProviderUsage | None = None,
+        error_category: str | None = None,
+    ) -> None:
         user = self.auth.current_user()
+        self._save_usage(
+            user.id,
+            project.workspace_id,
+            project.id,
+            correlation_id,
+            status,
+            operation=operation,
+            usage=usage,
+            error_category=error_category,
+        )
+
+    def _save_usage(
+        self,
+        user_id: str,
+        workspace_id: str,
+        project_id: str,
+        correlation_id: str,
+        status: str,
+        *,
+        operation: str,
+        usage: ProviderUsage | None = None,
+        error_category: str | None = None,
+    ) -> None:
         self.repository.save_usage(
             UsageEvent(
                 id=self.ids.new_id(),
-                user_id=user.id,
-                workspace_id=project.workspace_id,
-                project_id=project.id,
-                operation="TEST_ASSISTANT",
-                provider="aqlio-fake",
-                model="deterministic-grounded-v1",
+                user_id=user_id,
+                workspace_id=workspace_id,
+                project_id=project_id,
+                operation=operation,
+                provider=usage.provider if usage else "aqlio-fake",
+                model=usage.model if usage else "deterministic-grounded-v1",
                 occurred_at=self.clock.now(),
                 status=status,
-                request_units=1,
-                estimated_cost=0.0,
+                request_units=usage.input_units if usage else 1,
+                estimated_cost=usage.estimated_cost if usage else 0.0,
                 correlation_id=correlation_id,
+                output_units=usage.output_units if usage else 0,
+                latency_ms=usage.latency_ms if usage else 0,
+                retry_count=usage.retry_count if usage else 0,
+                error_category=error_category,
+                cost_is_estimated=usage.cost_is_estimated if usage else True,
             )
         )
+
+    def _provider_failure(
+        self, project: Project, correlation_id: str, operation: str, error: ProviderCallError
+    ) -> None:
+        usage = ProviderUsage(
+            provider=error.provider,
+            model=error.model,
+            latency_ms=error.latency_ms,
+            retry_count=error.retry_count,
+        )
+        self._usage(
+            project,
+            correlation_id,
+            "FAILED",
+            operation=operation,
+            usage=usage,
+            error_category=error.category,
+        )
+
+    def _save_provider_failure(
+        self,
+        user_id: str,
+        workspace_id: str,
+        project_id: str,
+        correlation_id: str,
+        operation: str,
+        error: ProviderCallError,
+    ) -> None:
+        self._save_usage(
+            user_id,
+            workspace_id,
+            project_id,
+            correlation_id,
+            "FAILED",
+            operation=operation,
+            usage=ProviderUsage(
+                provider=error.provider,
+                model=error.model,
+                latency_ms=error.latency_ms,
+                retry_count=error.retry_count,
+            ),
+            error_category=error.category,
+        )
+
+    def _has_allowance(self, user_id: str) -> bool:
+        allowance = self.repository.get_daily_allowance(user_id)
+        effective_allowance = allowance or self.settings.daily_ai_request_allowance
+        return self.repository.usage_count_for_user(user_id) < effective_allowance
 
     def _lifecycle(self, project_id: str, event_type: str, metadata: dict[str, str]) -> None:
         self.repository.save_lifecycle(

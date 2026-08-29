@@ -19,7 +19,7 @@ from app.adapters import (
 from app.application import M0Service
 from app.application.errors import AuthorizationError, ShareAccessError
 from app.config import Settings
-from app.domain import PublicationVisibility, User
+from app.domain import PublicationVisibility, UsageEvent, User
 from app.infrastructure.database import create_database_engine, create_session_factory
 from tests.helpers import fixture_bytes
 
@@ -63,6 +63,26 @@ def test_migration_and_complete_state_survive_reconstruction(
     publication = first.deploy(project.id, idempotency_key="durable-deploy")
     receipt = first.enable_link_sharing(publication.id)
     first.repository.set_daily_allowance(first.auth.current_user().id, 7, first.clock.now())
+    first.repository.save_usage(
+        UsageEvent(
+            "managed-usage",
+            first.auth.current_user().id,
+            workspace.id,
+            project.id,
+            "TEST_ASSISTANT",
+            "openai",
+            "configured-model",
+            first.clock.now(),
+            "FAILED",
+            11,
+            0.002,
+            "managed-correlation",
+            output_units=3,
+            latency_ms=50,
+            retry_count=2,
+            error_category="TIMEOUT",
+        )
+    )
 
     restarted = service_for(database_url, storage_root)
 
@@ -71,6 +91,14 @@ def test_migration_and_complete_state_survive_reconstruction(
     assert restarted.list_documents(project.id)[0].normalized_text
     assert restarted.repository.get_daily_allowance(restarted.auth.current_user().id) == 7
     assert restarted.repository.list_usage_events()
+    managed = next(
+        event for event in restarted.repository.list_usage_events() if event.id == "managed-usage"
+    )
+    assert (managed.output_units, managed.retry_count, managed.error_category) == (
+        3,
+        2,
+        "TIMEOUT",
+    )
     assert restarted.repository.list_lifecycle_events()
     assert restarted.repository.list_audit_events()
     assert restarted.open_private(publication.id).project_name == "Durable Handbook"

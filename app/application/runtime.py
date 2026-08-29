@@ -17,6 +17,8 @@ from app.adapters import (
     InMemoryRateLimiter,
     InMemoryStorageAdapter,
     LocalPrivateStorage,
+    OpenAIEmbeddingAdapter,
+    OpenAIGenerationAdapter,
     S3CompatiblePrivateStorage,
     SQLAlchemyM0Repository,
     StreamlitOIDCAuth,
@@ -27,7 +29,7 @@ from app.application.foundation import Foundation
 from app.config import Settings
 from app.domain import User
 from app.infrastructure.database import create_database_engine, create_session_factory
-from app.ports import AuthPort, M0RepositoryPort, StoragePort
+from app.ports import AuthPort, EmbeddingPort, GenerationPort, M0RepositoryPort, StoragePort
 
 
 def build_runtime_foundation(
@@ -78,13 +80,35 @@ def build_runtime_foundation(
     else:
         storage = InMemoryStorageAdapter()
 
+    generation: GenerationPort
+    embedding: EmbeddingPort
+    if settings.ai_mode == "managed":
+        generation = OpenAIGenerationAdapter(
+            api_key=settings.openai_api_key or "",
+            model=settings.openai_generation_model or "",
+            timeout_seconds=settings.ai_timeout_seconds,
+            max_retries=settings.ai_max_retries,
+            input_cost_per_million=settings.generation_input_cost_per_million,
+            output_cost_per_million=settings.generation_output_cost_per_million,
+        )
+        embedding = OpenAIEmbeddingAdapter(
+            api_key=settings.openai_api_key or "",
+            model=settings.openai_embedding_model or "",
+            timeout_seconds=settings.ai_timeout_seconds,
+            max_retries=settings.ai_max_retries,
+            input_cost_per_million=settings.embedding_input_cost_per_million,
+        )
+    else:
+        generation = FakeGenerationAdapter()
+        embedding = FakeEmbeddingAdapter()
+
     return Foundation(
         settings=settings,
         auth=auth,
         clock=clock,
         ids=UUIDIdFactory(),
-        generation=FakeGenerationAdapter(),
-        embedding=FakeEmbeddingAdapter(),
+        generation=generation,
+        embedding=embedding,
         projects=InMemoryProjectRepository(),
         state=state,
         storage=storage,

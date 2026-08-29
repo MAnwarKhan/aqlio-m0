@@ -149,6 +149,11 @@ class UsageEvent:
     request_units: int
     estimated_cost: float
     correlation_id: str
+    output_units: int = 0
+    latency_ms: int = 0
+    retry_count: int = 0
+    error_category: str | None = None
+    cost_is_estimated: bool = True
 
 
 @dataclass(frozen=True, slots=True)

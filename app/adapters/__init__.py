@@ -13,6 +13,7 @@ from app.adapters.deterministic import (
     UUIDIdFactory,
 )
 from app.adapters.oidc_auth import StreamlitOIDCAuth
+from app.adapters.openai_ai import OpenAIEmbeddingAdapter, OpenAIGenerationAdapter
 from app.adapters.rate_limit import InMemoryRateLimiter
 from app.adapters.sqlalchemy_repository import SQLAlchemyM0Repository
 from app.adapters.storage import (
@@ -32,6 +33,8 @@ __all__ = [
     "InMemoryRateLimiter",
     "InMemoryStorageAdapter",
     "LocalPrivateStorage",
+    "OpenAIEmbeddingAdapter",
+    "OpenAIGenerationAdapter",
     "S3CompatiblePrivateStorage",
     "SQLAlchemyM0Repository",
     "StorageAdapterError",

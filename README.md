@@ -1,6 +1,6 @@
 # Aqlio M0 — Ask My Documents
 
-Aqlio M0 is a guided Streamlit prototype for non-technical participants to create, test, publish, and share a document-question-answering assistant. Phase 3 adds durable pilot infrastructure while keeping AI deterministic and free of paid calls.
+Aqlio M0 is a guided Streamlit prototype for non-technical participants to create, test, publish, and share a document-question-answering assistant. Phase 4 adds optional managed document intelligence while preserving deterministic, credential-free development and CI.
 
 ## Requirements
 
@@ -47,6 +47,8 @@ Configuration uses environment variables. Development defaults are safe and cred
 
 ## Architecture
 
-Streamlit UI remains thin. Domain rules do not import Streamlit or vendors. Authentication, persistence, storage, generation, embedding, clock, ID, and rate-limit behavior live behind ports. Phase 3 supplies Google OIDC identity mapping, SQLAlchemy persistence, and private S3-compatible storage; managed AI remains Phase 4.
+Streamlit UI remains thin. Domain rules do not import Streamlit or vendors. Authentication, persistence, storage, generation, embedding, clock, ID, and rate-limit behavior live behind ports. Managed OpenAI generation and embedding are configuration-selected adapters; fake adapters remain the default and are never silently substituted in managed mode.
+
+Managed mode requires `OPENAI_API_KEY`, `OPENAI_GENERATION_MODEL`, and `OPENAI_EMBEDDING_MODEL`. Pricing inputs are configuration metadata rather than embedded commercial assumptions. Live tests are disabled unless explicitly enabled and are protected by call and estimated-cost caps.
 
 Participant-facing Deploy means freezing and publishing an immutable assistant version inside Aqlio—not provisioning infrastructure.

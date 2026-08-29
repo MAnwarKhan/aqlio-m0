@@ -23,7 +23,7 @@ from app.domain.models import (
     Workspace,
     WorkspaceMember,
 )
-from app.ports.contracts import Citation, GenerationRequest, GenerationResponse
+from app.ports.contracts import Citation, EmbeddingResponse, GenerationRequest, GenerationResponse
 
 
 class DeterministicDevelopmentAuth:
@@ -66,12 +66,12 @@ class UUIDIdFactory:
 
 
 class FakeEmbeddingAdapter:
-    def embed(self, texts: Sequence[str]) -> list[list[float]]:
-        vectors: list[list[float]] = []
+    def embed(self, texts: Sequence[str]) -> EmbeddingResponse:
+        vectors: list[tuple[float, ...]] = []
         for text in texts:
             digest = hashlib.sha256(text.encode("utf-8")).digest()
-            vectors.append([round(byte / 255, 6) for byte in digest[:8]])
-        return vectors
+            vectors.append(tuple(round(byte / 255, 6) for byte in digest[:8]))
+        return EmbeddingResponse(tuple(vectors))
 
 
 class FakeGenerationAdapter:

@@ -8,7 +8,7 @@ from app.application import M0Service, OperationsService, build_runtime_foundati
 from app.application.errors import AqlioError, ShareAccessError
 from app.config import Settings, SettingsError
 from app.domain import AssetStatus, ProjectStatus
-from app.ports import AuthenticationRequired
+from app.ports import AuthenticationRequired, ProviderCallError
 
 
 @st.cache_resource
@@ -122,7 +122,7 @@ def _render_documents(service: M0Service, project_id: str) -> None:
             try:
                 service.upload_document(project_id, upload.name, upload.getvalue())
                 st.success(f"Added {upload.name}.")
-            except AqlioError as exc:
+            except (AqlioError, ProviderCallError) as exc:
                 st.error(str(exc))
         st.rerun()
     documents = service.list_documents(project_id)
@@ -143,7 +143,7 @@ def _render_documents(service: M0Service, project_id: str) -> None:
                 service.prepare_document(project_id, document.id)
                 st.success("Your document is ready.")
                 st.rerun()
-            except AqlioError as exc:
+            except (AqlioError, ProviderCallError) as exc:
                 st.error(str(exc))
 
 
@@ -164,7 +164,7 @@ def _render_testing(service: M0Service, project_id: str) -> None:
             st.session_state["last_answer"] = service.ask_question(
                 project_id, question, guided=guided
             )
-        except AqlioError as exc:
+        except (AqlioError, ProviderCallError) as exc:
             st.error(str(exc))
     answer = st.session_state.get("last_answer")
     if not answer:
@@ -246,6 +246,24 @@ def _render_shared(service: M0Service, token: str) -> None:
     st.header(assistant.project_name)
     st.write("This assistant is available through a shared link.")
     st.caption("Sources included: " + ", ".join(assistant.source_names))
+    with st.form("shared-question"):
+        question = st.text_input("Ask a question")
+        submitted = st.form_submit_button("Ask", type="primary")
+    if submitted:
+        try:
+            answer = service.ask_shared(token, question)
+            if answer.abstained:
+                st.warning(
+                    "I couldn't find enough information in the documents to answer that "
+                    "confidently."
+                )
+            else:
+                st.write(answer.text)
+                st.markdown("**Sources**")
+                for citation in answer.citations:
+                    st.write(f"- {citation.document_name} — source passage")
+        except (AqlioError, ProviderCallError) as exc:
+            st.error(str(exc))
 
 
 def _render_operations(service: M0Service) -> None:
@@ -264,3 +282,6 @@ def _render_operations(service: M0Service) -> None:
     st.metric("Shared assistants", snapshot.shared_count)
     st.metric("Revoked links", snapshot.revoked_count)
     st.write(f"Assistant service: {snapshot.provider_status}")
+    st.write(f"Configured assistant model: {snapshot.configured_model}")
+    st.write(f"Recent service failures: {snapshot.recent_provider_failures}")
+    st.write(f"Last successful service call: {snapshot.last_successful_call}")

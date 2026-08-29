@@ -66,3 +66,18 @@ See `M0_ARCHITECTURE_DECISIONS_2026-08-29.md` for the complete approved decision
 
 **Status:** Accepted for Phase 3
 **Decision:** Upload, preparation, AI, and shared-link entry points use a rate-limit port. The Phase 3 implementation is process-local and suitable for the single-instance pilot; a shared backend is required before horizontal scaling.
+
+## ADR-014 — Managed AI metadata stays provider-neutral
+
+**Status:** Accepted for Phase 4
+**Decision:** Generation and embedding results may carry generic usage metadata: provider/model identifiers, input/output units, estimated cost, latency, and retry count. SDK objects and raw exceptions stay inside adapters. Pricing is configuration, not domain policy.
+
+## ADR-015 — Trusted retrieval owns citations
+
+**Status:** Accepted for Phase 4
+**Decision:** Managed output may select only chunk IDs included in the authorized retrieved context. Aqlio maps those IDs to trusted source metadata and rejects fabricated references. Empty evidence causes local abstention without a paid provider call.
+
+## ADR-016 — Managed activation is an explicit release step
+
+**Status:** Accepted for Phase 4
+**Decision:** Fake mode remains the development/CI default. Managed mode fails closed without key and model configuration. Live tests are separately enabled and bounded by call and estimated-cost caps; adding adapters does not activate them.

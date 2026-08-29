@@ -65,3 +65,13 @@
 **Known issues:** Standard CI validates PostgreSQL-compatible behavior through SQLite and S3 behavior through a fake client; live Railway/OIDC validation needs isolated external credentials. The in-memory rate limiter assumes one application instance. Hard deletion remains an operator runbook procedure rather than product UI.
 **Deferred items:** Managed OpenAI generation/embedding, provider error policy/evals, and multi-instance shared rate limiting.
 **Next phase:** Add managed AI in the approved Phase 4 security/cost/evaluation sequence.
+
+## Phase 4 — Optional managed document intelligence
+
+**Status:** Complete and commit-ready.
+**Implemented:** Managed OpenAI embedding and Responses API generation adapters; explicit fake/managed composition; bounded timeout/transient retry policy; stable error categories; trusted citation mapping; local no-evidence abstention; managed embedding/generation allowance gates; durable token/cost/latency/retry/failure metadata; immutable shared-publication queries; safe operator provider diagnostics; opt-in four-call live harness with cost cap.
+**Database changes:** Additive migration `20260829_0002` adds output units, latency, retry count, normalized error category, and estimated-cost provenance to usage events.
+**Tests added:** Managed adapter vectors/usage, trusted/fabricated citations, timeout/retry bounds, authorization/readiness/allowance-before-call spies, failed-call persistence, immutable shared queries, managed configuration failure, and credential-gated live coverage.
+**Known issues:** Live OpenAI and full Railway staging checks require external credentials and were not run. Pricing defaults to zero until operators configure reviewed rates. Process-local rate limiting remains a single-instance pilot constraint.
+**Deferred items:** Controlled staging activation, infrastructure restore drill, live usage reconciliation review, and any shared/distributed rate limiter needed for scaling.
+**Next phase:** Execute a staged, budget-capped release without changing participant behavior.

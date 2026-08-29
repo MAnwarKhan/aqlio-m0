@@ -18,6 +18,9 @@ class OperationsSnapshot:
     shared_count: int
     revoked_count: int
     provider_status: str
+    configured_model: str
+    recent_provider_failures: int
+    last_successful_call: str
 
 
 class OperationsService:
@@ -30,6 +33,10 @@ class OperationsService:
         self._require_admin()
         usage = self._repository.list_usage_events()
         links = self._repository.list_share_links()
+        provider_events = [event for event in usage if event.provider != "aqlio-fake"]
+        successful = [event for event in provider_events if event.status == "SUCCEEDED"]
+        latest = max(provider_events, key=lambda event: event.occurred_at, default=None)
+        last_success = max(successful, key=lambda event: event.occurred_at, default=None)
         return OperationsSnapshot(
             user_count=len(self._repository.list_users()),
             project_count=len(self._repository.list_all_projects()),
@@ -38,7 +45,12 @@ class OperationsService:
             failed_ai_run_count=sum(event.status == "FAILED" for event in usage),
             shared_count=sum(link.visibility.value == "LINK_ONLY" for link in links),
             revoked_count=sum(link.visibility.value == "REVOKED" for link in links),
-            provider_status="Deterministic mode",
+            provider_status="Managed" if provider_events else "Deterministic mode",
+            configured_model=latest.model if latest else "Deterministic",
+            recent_provider_failures=sum(event.status == "FAILED" for event in provider_events),
+            last_successful_call=(
+                last_success.occurred_at.isoformat() if last_success else "No managed calls"
+            ),
         )
 
     def set_allowance(self, user_id: str, daily_limit: int) -> None:

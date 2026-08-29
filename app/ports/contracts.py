@@ -27,6 +27,26 @@ class AuthenticationRequired(RuntimeError):
     """Authentication boundary did not provide a valid identity."""
 
 
+class ProviderCallError(RuntimeError):
+    """Normalized managed-provider failure without raw provider details."""
+
+    def __init__(
+        self,
+        category: str,
+        *,
+        provider: str,
+        model: str,
+        retry_count: int = 0,
+        latency_ms: int = 0,
+    ) -> None:
+        super().__init__("We couldn't complete that request right now. Please try again.")
+        self.category = category
+        self.provider = provider
+        self.model = model
+        self.retry_count = retry_count
+        self.latency_ms = latency_ms
+
+
 @dataclass(frozen=True, slots=True)
 class RetrievedContext:
     document_id: str
@@ -42,6 +62,18 @@ class GenerationRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class ProviderUsage:
+    provider: str
+    model: str
+    input_units: int = 0
+    output_units: int = 0
+    estimated_cost: float = 0.0
+    latency_ms: int = 0
+    retry_count: int = 0
+    cost_is_estimated: bool = True
+
+
+@dataclass(frozen=True, slots=True)
 class Citation:
     document_name: str
     chunk_id: str
@@ -52,6 +84,13 @@ class GenerationResponse:
     answer: str
     citations: tuple[Citation, ...]
     abstained: bool = False
+    usage: ProviderUsage | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class EmbeddingResponse:
+    vectors: tuple[tuple[float, ...], ...]
+    usage: ProviderUsage | None = None
 
 
 class AuthPort(Protocol):
@@ -71,7 +110,7 @@ class GenerationPort(Protocol):
 
 
 class EmbeddingPort(Protocol):
-    def embed(self, texts: Sequence[str]) -> list[list[float]]: ...
+    def embed(self, texts: Sequence[str]) -> EmbeddingResponse: ...
 
 
 class ProjectRepositoryPort(Protocol):

@@ -1,3 +1,8 @@
 pypdf==6.0.0
 python-docx==1.2.0
 streamlit==1.49.1
+alembic==1.16.5
+boto3==1.40.21
+openai==1.102.0
+psycopg[binary]==3.2.9
+sqlalchemy==2.0.43
