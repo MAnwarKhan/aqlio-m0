@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aqlio-m0"
+version = "0.1.0"
+description = "Deterministic foundation for Aqlio M0 — Ask My Documents"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "streamlit==1.49.1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "mypy==1.17.1",
+  "pytest==8.4.1",
+  "ruff==0.12.10",
+]
+pilot = [
+  "alembic==1.16.5",
+  "psycopg[binary]==3.2.9",
+  "sqlalchemy==2.0.43",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["app"]
