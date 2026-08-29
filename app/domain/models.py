@@ -42,6 +42,9 @@ class User:
     email: str
     display_name: str
     active: bool = True
+    is_admin: bool = False
+    identity_provider: str | None = None
+    identity_subject: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

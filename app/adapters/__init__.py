@@ -9,6 +9,16 @@ from app.adapters.deterministic import (
     InMemoryM0Repository,
     InMemoryProjectRepository,
     InMemoryStorageAdapter,
+    SystemClock,
+    UUIDIdFactory,
+)
+from app.adapters.oidc_auth import StreamlitOIDCAuth
+from app.adapters.rate_limit import InMemoryRateLimiter
+from app.adapters.sqlalchemy_repository import SQLAlchemyM0Repository
+from app.adapters.storage import (
+    LocalPrivateStorage,
+    S3CompatiblePrivateStorage,
+    StorageAdapterError,
 )
 
 __all__ = [
@@ -19,5 +29,13 @@ __all__ = [
     "FakeGenerationAdapter",
     "InMemoryM0Repository",
     "InMemoryProjectRepository",
+    "InMemoryRateLimiter",
     "InMemoryStorageAdapter",
+    "LocalPrivateStorage",
+    "S3CompatiblePrivateStorage",
+    "SQLAlchemyM0Repository",
+    "StorageAdapterError",
+    "StreamlitOIDCAuth",
+    "SystemClock",
+    "UUIDIdFactory",
 ]

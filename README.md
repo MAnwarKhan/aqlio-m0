@@ -1,6 +1,6 @@
 # Aqlio M0 — Ask My Documents
 
-Aqlio M0 is a guided Streamlit prototype for non-technical participants to create, test, publish, and share a document-question-answering assistant. Phase 2 provides the complete deterministic journey; it intentionally makes no paid AI calls and needs no production credentials.
+Aqlio M0 is a guided Streamlit prototype for non-technical participants to create, test, publish, and share a document-question-answering assistant. Phase 3 adds durable pilot infrastructure while keeping AI deterministic and free of paid calls.
 
 ## Requirements
 
@@ -13,7 +13,7 @@ Aqlio M0 is a guided Streamlit prototype for non-technical participants to creat
 python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install -e '.[dev]'
+python -m pip install -e '.[dev,pilot]'
 cp .env.example .env
 streamlit run streamlit_app.py
 ```
@@ -29,7 +29,7 @@ The default development configuration uses deterministic authentication, local i
 5. Confirm readiness and deploy an immutable private publication.
 6. Open the assistant, explicitly enable link sharing, and stop sharing when desired.
 
-All authoritative state flows through application/domain/repository boundaries. Streamlit session state holds only transient navigation and display conveniences. Restart persistence arrives with approved Phase 3 PostgreSQL and private file-storage adapters.
+All authoritative state flows through application/domain/repository boundaries. Streamlit session state holds only transient navigation and display conveniences. SQLAlchemy/Alembic and private local or S3-compatible storage provide restart-safe pilot state.
 
 ## Quality checks
 
@@ -43,10 +43,10 @@ python -m pytest tests/evals
 
 ## Configuration
 
-Configuration uses environment variables. Development defaults are safe and credential-free. Pilot mode fails closed unless database, OIDC, private object storage, and managed-AI settings are present. See `.env.example` and `docs/DEPLOYMENT.md`.
+Configuration uses environment variables. Development defaults are safe and credential-free. Pilot mode fails closed unless database, OIDC, and private object-storage settings are present. Managed-AI settings are required only when managed AI is selected. See `.env.example` and `docs/DEPLOYMENT.md`.
 
 ## Architecture
 
-Streamlit UI remains thin. Domain rules do not import Streamlit or vendors. Authentication, persistence, storage, generation, embedding, clock, and ID behavior live behind ports. Phase 2 uses deterministic in-memory/local adapters and project/version-scoped retrieval; approved production adapters arrive in later phases.
+Streamlit UI remains thin. Domain rules do not import Streamlit or vendors. Authentication, persistence, storage, generation, embedding, clock, ID, and rate-limit behavior live behind ports. Phase 3 supplies Google OIDC identity mapping, SQLAlchemy persistence, and private S3-compatible storage; managed AI remains Phase 4.
 
 Participant-facing Deploy means freezing and publishing an immutable assistant version inside Aqlio—not provisioning infrastructure.

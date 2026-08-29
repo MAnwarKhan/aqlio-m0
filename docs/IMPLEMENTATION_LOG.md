@@ -55,3 +55,13 @@
 - Horizontal authorization/isolation — passed
 - Publication privacy/immutability/sharing/revocation — passed
 - Production credentials, paid AI calls, and external runtime services — none used
+
+## Phase 3 — Durable pilot infrastructure
+
+**Status:** Complete and commit-ready.
+**Implemented:** Alembic-managed SQLAlchemy schema/repository; durable workspaces, versions, assets, chunks, usage, allowances, lifecycle/audit evidence, publications, and sharing; private local/S3-compatible storage; restart-safe reconstruction; Streamlit Google OIDC mapping; persisted authorization; protected operator snapshot/allowance control; entry-point rate limits; fail-closed pilot composition and deployment procedures.
+**Database changes:** Initial M0 schema migration covering identity, authorization, project/document lifecycle, AI evidence, publication/sharing, and operations records.
+**Tests added:** Fresh migration, transaction rollback, full restart reconstruction, post-restart revocation, private storage isolation, fake S3 behavior, OIDC claim mapping, disabled-user preservation, admin-only operations, and rate limiting.
+**Known issues:** Standard CI validates PostgreSQL-compatible behavior through SQLite and S3 behavior through a fake client; live Railway/OIDC validation needs isolated external credentials. The in-memory rate limiter assumes one application instance. Hard deletion remains an operator runbook procedure rather than product UI.
+**Deferred items:** Managed OpenAI generation/embedding, provider error policy/evals, and multi-instance shared rate limiting.
+**Next phase:** Add managed AI in the approved Phase 4 security/cost/evaluation sequence.

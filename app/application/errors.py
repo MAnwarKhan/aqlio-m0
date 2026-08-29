@@ -27,3 +27,7 @@ class NotReadyError(AqlioError):
 
 class ShareAccessError(AqlioError):
     pass
+
+
+class RateLimitExceeded(AqlioError):
+    pass

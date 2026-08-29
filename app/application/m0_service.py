@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
+from functools import wraps
 
 from app.application.documents import (
     chunk_text,
@@ -17,6 +19,7 @@ from app.application.errors import (
     AuthorizationError,
     NotReadyError,
     PreparationError,
+    RateLimitExceeded,
     ShareAccessError,
     ValidationError,
 )
@@ -49,6 +52,7 @@ from app.ports import (
     GenerationPort,
     IdPort,
     M0RepositoryPort,
+    RateLimitPort,
     StoragePort,
 )
 from app.ports.contracts import Citation, GenerationRequest, RetrievedContext
@@ -71,6 +75,18 @@ _STOPWORDS = {
     "what",
     "when",
 }
+
+
+def transactional[**P, R](method: Callable[P, R]) -> Callable[P, R]:
+    @wraps(method)
+    def wrapped(*args: P.args, **kwargs: P.kwargs) -> R:
+        service = args[0]
+        if not isinstance(service, M0Service):
+            raise TypeError("Transactional methods require M0Service.")
+        with service.repository.transaction():
+            return method(*args, **kwargs)
+
+    return wrapped
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +126,7 @@ class M0Service:
         embedding: EmbeddingPort,
         repository: M0RepositoryPort,
         storage: StoragePort,
+        rate_limiter: RateLimitPort | None = None,
     ) -> None:
         self.settings = settings
         self.auth = auth
@@ -119,12 +136,20 @@ class M0Service:
         self.embedding = embedding
         self.repository = repository
         self.storage = storage
+        self.rate_limiter = rate_limiter
 
+    @transactional
     def resolve_workspace(self) -> Workspace:
-        user = self.auth.current_user()
-        if not user.active:
+        identity = self.auth.current_user()
+        persisted = self.repository.get_user(identity.id)
+        if persisted and not persisted.active:
             raise AuthorizationError("Your Aqlio access is not active.")
-        self.repository.save_user(user)
+        user = persisted or identity
+        self.repository.save_user(identity)
+        if self.repository.get_daily_allowance(user.id) is None:
+            self.repository.set_daily_allowance(
+                user.id, self.settings.daily_ai_request_allowance, self.clock.now()
+            )
         existing = self.repository.get_workspace_for_user(user.id)
         if existing:
             return existing
@@ -134,6 +159,7 @@ class M0Service:
         self._audit(workspace.id, None, "WORKSPACE_CREATED", "SUCCEEDED")
         return workspace
 
+    @transactional
     def create_project(self, name: str, description: str = "") -> Project:
         user = self.auth.current_user()
         workspace = self.resolve_workspace()
@@ -170,8 +196,10 @@ class M0Service:
         project = self._authorized_project(project_id)
         return self.repository.list_assets(project.id)
 
+    @transactional
     def upload_document(self, project_id: str, filename: str, content: bytes) -> Asset:
         project = self._authorized_project(project_id)
+        self._limit(project.owner_user_id, "upload", self.settings.upload_rate_limit)
         assets = self.repository.list_assets(project.id)
         checksum = hashlib.sha256(content).hexdigest()
         duplicate = self.repository.find_asset_by_checksum(project.id, checksum)
@@ -195,29 +223,38 @@ class M0Service:
             project_id=project.id,
             content=content,
         )
-        asset = Asset(
-            id=self.ids.new_id(),
-            workspace_id=project.workspace_id,
-            project_id=project.id,
-            original_name=display_name,
-            safe_name=safe_name,
-            media_type=media_type,
-            size_bytes=len(content),
-            checksum=checksum,
-            storage_key=storage_key,
-            created_at=self.clock.now(),
-        )
-        self.repository.save_asset(asset)
-        project.valid_document_count += 1
-        if project.status == ProjectStatus.DRAFT:
-            transition_project(project, ProjectStatus.DOCUMENTS_ADDED)
-        project.updated_at = self.clock.now()
-        self.repository.save_project(project)
-        self._lifecycle(project.id, "DOCUMENT_UPLOADED", {"asset_id": asset.id})
-        return asset
+        try:
+            asset = Asset(
+                id=self.ids.new_id(),
+                workspace_id=project.workspace_id,
+                project_id=project.id,
+                original_name=display_name,
+                safe_name=safe_name,
+                media_type=media_type,
+                size_bytes=len(content),
+                checksum=checksum,
+                storage_key=storage_key,
+                created_at=self.clock.now(),
+            )
+            self.repository.save_asset(asset)
+            project.valid_document_count += 1
+            if project.status == ProjectStatus.DRAFT:
+                transition_project(project, ProjectStatus.DOCUMENTS_ADDED)
+            project.updated_at = self.clock.now()
+            self.repository.save_project(project)
+            self._lifecycle(project.id, "DOCUMENT_UPLOADED", {"asset_id": asset.id})
+            return asset
+        except Exception:
+            self.storage.delete(
+                workspace_id=project.workspace_id,
+                project_id=project.id,
+                storage_key=storage_key,
+            )
+            raise
 
     def prepare_document(self, project_id: str, asset_id: str) -> Asset:
         project = self._authorized_project(project_id)
+        self._limit(project.owner_user_id, "prepare", self.settings.preparation_rate_limit)
         asset = self._authorized_asset(project, asset_id)
         if asset.status == AssetStatus.READY:
             return asset
@@ -226,11 +263,16 @@ class M0Service:
         self.repository.save_asset(asset)
         self._lifecycle(project.id, "DOCUMENT_PREPARATION_STARTED", {"asset_id": asset.id})
         try:
-            content = self.storage.get(
-                workspace_id=project.workspace_id,
-                project_id=project.id,
-                storage_key=asset.storage_key,
-            )
+            try:
+                content = self.storage.get(
+                    workspace_id=project.workspace_id,
+                    project_id=project.id,
+                    storage_key=asset.storage_key,
+                )
+            except Exception as exc:
+                raise PreparationError(
+                    "We couldn't access this document. Add it again and try again."
+                ) from exc
             normalized = extract_text(asset.original_name, content)
             asset.normalized_text = normalized
             asset.status = AssetStatus.READY
@@ -260,16 +302,16 @@ class M0Service:
     def ask_question(self, project_id: str, question: str, *, guided: bool = False) -> Answer:
         project = self._authorized_project(project_id)
         user = self.auth.current_user()
+        self._limit(user.id, "test_assistant", self.settings.ai_rate_limit)
         clean_question = " ".join(question.split())
         if not clean_question:
             raise ValidationError("Enter a question to test your assistant.")
         if project.current_version_id is None or project.prepared_document_count < 1:
             raise NotReadyError("Prepare at least one document before testing your assistant.")
         correlation_id = self.ids.new_id()
-        if (
-            self.repository.usage_count_for_user(user.id)
-            >= self.settings.daily_ai_request_allowance
-        ):
+        allowance = self.repository.get_daily_allowance(user.id)
+        effective_allowance = allowance or self.settings.daily_ai_request_allowance
+        if self.repository.usage_count_for_user(user.id) >= effective_allowance:
             self._usage(project, correlation_id, "REJECTED")
             raise AllowanceExceeded(
                 "You've reached your Aqlio AI usage allowance. Please try again after it resets."
@@ -295,6 +337,7 @@ class M0Service:
             self._lifecycle(project.id, "TEST_COMPLETED", {"test_id": test.id})
         return Answer(response.answer, response.citations, response.abstained, correlation_id)
 
+    @transactional
     def confirm_readiness(self, project_id: str) -> Project:
         project = self._authorized_project(project_id)
         project.readiness_confirmed = True
@@ -312,6 +355,7 @@ class M0Service:
         result = assess_readiness(self._authorized_project(project_id))
         return result.ready, result.missing
 
+    @transactional
     def deploy(self, project_id: str, *, idempotency_key: str) -> Publication:
         project = self._authorized_project(project_id)
         existing = self.repository.get_publication_for_idempotency(idempotency_key)
@@ -357,6 +401,7 @@ class M0Service:
             raise AuthorizationError("You do not have permission to open this assistant.")
         return self._publication_view(publication, PublicationVisibility.PRIVATE)
 
+    @transactional
     def enable_link_sharing(self, publication_id: str) -> ShareReceipt:
         publication = self._owned_publication(publication_id)
         link = self.repository.get_share_link(publication.id) or ShareLink(publication.id)
@@ -377,6 +422,9 @@ class M0Service:
         return ShareReceipt(publication.id, token)
 
     def open_shared(self, token: str) -> PublishedAssistant:
+        self._limit(
+            self._token_hash(token), "shared_access", self.settings.shared_access_rate_limit
+        )
         link = self.repository.find_share_link_by_hash(self._token_hash(token))
         if link is None or link.visibility != PublicationVisibility.LINK_ONLY:
             raise ShareAccessError("This assistant link is invalid or no longer available.")
@@ -385,6 +433,7 @@ class M0Service:
             raise ShareAccessError("This assistant link is invalid or no longer available.")
         return self._publication_view(publication, link.visibility)
 
+    @transactional
     def revoke_sharing(self, publication_id: str) -> None:
         publication = self._owned_publication(publication_id)
         link = self.repository.get_share_link(publication.id)
@@ -548,3 +597,12 @@ class M0Service:
     @staticmethod
     def _token_hash(token: str) -> str:
         return hashlib.sha256(token.encode()).hexdigest()
+
+    def _limit(self, subject: str, operation: str, limit: int) -> None:
+        if self.rate_limiter and not self.rate_limiter.allow(
+            subject=subject,
+            operation=operation,
+            limit=limit,
+            window_seconds=self.settings.rate_limit_window_seconds,
+        ):
+            raise RateLimitExceeded("Please wait a moment before trying that again.")

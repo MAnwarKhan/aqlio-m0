@@ -1,10 +1,12 @@
 """Credential-free deterministic adapters for development and tests."""
 
 import hashlib
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from copy import deepcopy
 from datetime import UTC, datetime
 from itertools import count
+from uuid import uuid4
 
 from app.domain.models import (
     Asset,
@@ -51,6 +53,16 @@ class DeterministicIdFactory:
 
     def new_id(self) -> str:
         return f"{self._prefix}-{next(self._counter):04d}"
+
+
+class SystemClock:
+    def now(self) -> datetime:
+        return datetime.now(UTC)
+
+
+class UUIDIdFactory:
+    def new_id(self) -> str:
+        return str(uuid4())
 
 
 class FakeEmbeddingAdapter:
@@ -131,9 +143,38 @@ class InMemoryM0Repository:
         self.publications: dict[str, Publication] = {}
         self.publication_commands: dict[str, str] = {}
         self.share_links: dict[str, ShareLink] = {}
+        self.allowances: dict[str, int] = {}
+
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        snapshot = {
+            key: value.copy() if isinstance(value, dict | list) else value
+            for key, value in self.__dict__.items()
+        }
+        try:
+            yield
+        except Exception:
+            self.__dict__.clear()
+            self.__dict__.update(snapshot)
+            raise
 
     def save_user(self, user: User) -> None:
+        existing = self.users.get(user.id)
+        if existing and not existing.active:
+            user = User(
+                user.id,
+                user.email,
+                user.display_name,
+                active=False,
+                is_admin=existing.is_admin,
+                identity_provider=user.identity_provider,
+                identity_subject=user.identity_subject,
+            )
         self.users[user.id] = deepcopy(user)
+
+    def get_user(self, user_id: str) -> User | None:
+        user = self.users.get(user_id)
+        return deepcopy(user) if user else None
 
     def get_workspace_for_user(self, user_id: str) -> Workspace | None:
         for (workspace_id, member_user_id), _member in self.members.items():
@@ -211,6 +252,13 @@ class InMemoryM0Repository:
             event.user_id == user_id and event.status == "SUCCEEDED" for event in self.usage_events
         )
 
+    def get_daily_allowance(self, user_id: str) -> int | None:
+        return self.allowances.get(user_id)
+
+    def set_daily_allowance(self, user_id: str, limit: int, updated_at: datetime) -> None:
+        del updated_at
+        self.allowances[user_id] = limit
+
     def save_lifecycle(self, event: LifecycleEvent) -> None:
         self.lifecycle_events.append(event)
 
@@ -242,3 +290,24 @@ class InMemoryM0Repository:
             if link.token_hash == token_hash:
                 return deepcopy(link)
         return None
+
+    def list_users(self) -> list[User]:
+        return [deepcopy(user) for user in self.users.values()]
+
+    def list_all_projects(self) -> list[Project]:
+        return [deepcopy(project) for project in self.projects.values()]
+
+    def list_failed_assets(self) -> list[Asset]:
+        return [deepcopy(asset) for asset in self.assets.values() if asset.status.value == "FAILED"]
+
+    def list_usage_events(self) -> list[UsageEvent]:
+        return list(self.usage_events)
+
+    def list_share_links(self) -> list[ShareLink]:
+        return [deepcopy(link) for link in self.share_links.values()]
+
+    def list_lifecycle_events(self) -> list[LifecycleEvent]:
+        return list(self.lifecycle_events)
+
+    def list_audit_events(self) -> list[AuditEvent]:
+        return list(self.audit_events)

@@ -88,3 +88,21 @@ def test_oversized_document_is_rejected_before_storage() -> None:
         service.upload_document(project.id, "large.txt", b"x" * (1024 * 1024 + 1))
 
     assert service.repository.list_assets(project.id) == []
+
+
+def test_storage_failure_during_preparation_records_a_safe_failure() -> None:
+    service = build_service()
+    project = service.create_project("Unavailable file")
+    asset = service.upload_document(project.id, "handbook.txt", b"Useful policy text")
+    service.storage.delete(
+        workspace_id=project.workspace_id,
+        project_id=project.id,
+        storage_key=asset.storage_key,
+    )
+
+    with pytest.raises(PreparationError, match="couldn't access"):
+        service.prepare_document(project.id, asset.id)
+
+    failed = service.repository.get_asset(asset.id)
+    assert failed is not None and failed.status is AssetStatus.FAILED
+    assert failed.normalized_text is None

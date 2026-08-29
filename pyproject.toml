@@ -21,6 +21,7 @@ dev = [
 ]
 pilot = [
   "alembic==1.16.5",
+  "boto3==1.40.21",
   "psycopg[binary]==3.2.9",
   "sqlalchemy==2.0.43",
 ]

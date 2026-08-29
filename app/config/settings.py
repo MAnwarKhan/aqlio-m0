@@ -36,10 +36,25 @@ class Settings:
     max_files_per_project: int
     max_project_storage_mb: int
     allowed_file_types: frozenset[str]
+    persistence_mode: str = "in_memory"
+    storage_mode: str = "in_memory"
+    local_storage_path: str = "storage"
+    upload_rate_limit: int = 20
+    preparation_rate_limit: int = 20
+    ai_rate_limit: int = 30
+    shared_access_rate_limit: int = 60
+    rate_limit_window_seconds: int = 60
     database_url: str | None = None
     object_storage_endpoint: str | None = None
     object_storage_bucket: str | None = None
     oidc_provider: str | None = None
+    oidc_client_id: str | None = None
+    oidc_client_secret: str | None = None
+    oidc_redirect_uri: str | None = None
+    object_storage_access_key_id: str | None = None
+    object_storage_secret_access_key: str | None = None
+    object_storage_region: str | None = None
+    admin_emails: frozenset[str] = frozenset()
     openai_generation_model: str | None = None
     openai_embedding_model: str | None = None
 
@@ -62,10 +77,29 @@ class Settings:
             max_files_per_project=_positive_int("MAX_FILES_PER_PROJECT", 5),
             max_project_storage_mb=_positive_int("MAX_PROJECT_STORAGE_MB", 25),
             allowed_file_types=allowed,
+            persistence_mode=os.getenv("AQLIO_PERSISTENCE_MODE", "in_memory").lower(),
+            storage_mode=os.getenv("AQLIO_STORAGE_MODE", "in_memory").lower(),
+            local_storage_path=os.getenv("LOCAL_STORAGE_PATH", "storage"),
+            upload_rate_limit=_positive_int("UPLOAD_RATE_LIMIT", 20),
+            preparation_rate_limit=_positive_int("PREPARATION_RATE_LIMIT", 20),
+            ai_rate_limit=_positive_int("AI_RATE_LIMIT", 30),
+            shared_access_rate_limit=_positive_int("SHARED_ACCESS_RATE_LIMIT", 60),
+            rate_limit_window_seconds=_positive_int("RATE_LIMIT_WINDOW_SECONDS", 60),
             database_url=os.getenv("DATABASE_URL"),
             object_storage_endpoint=os.getenv("OBJECT_STORAGE_ENDPOINT"),
             object_storage_bucket=os.getenv("OBJECT_STORAGE_BUCKET"),
             oidc_provider=os.getenv("OIDC_PROVIDER"),
+            oidc_client_id=os.getenv("OIDC_CLIENT_ID"),
+            oidc_client_secret=os.getenv("OIDC_CLIENT_SECRET"),
+            oidc_redirect_uri=os.getenv("OIDC_REDIRECT_URI"),
+            object_storage_access_key_id=os.getenv("OBJECT_STORAGE_ACCESS_KEY_ID"),
+            object_storage_secret_access_key=os.getenv("OBJECT_STORAGE_SECRET_ACCESS_KEY"),
+            object_storage_region=os.getenv("OBJECT_STORAGE_REGION"),
+            admin_emails=frozenset(
+                email.strip().lower()
+                for email in os.getenv("ADMIN_EMAILS", "").split(",")
+                if email.strip()
+            ),
             openai_generation_model=os.getenv("OPENAI_GENERATION_MODEL"),
             openai_embedding_model=os.getenv("OPENAI_EMBEDDING_MODEL"),
         )
@@ -79,17 +113,28 @@ class Settings:
             raise SettingsError("AQLIO_AI_MODE must be fake or managed.")
         if not self.allowed_file_types or not self.allowed_file_types <= {"pdf", "docx", "txt"}:
             raise SettingsError("ALLOWED_FILE_TYPES may contain only pdf, docx, and txt.")
+        if self.persistence_mode not in {"in_memory", "sqlalchemy"}:
+            raise SettingsError("AQLIO_PERSISTENCE_MODE must be in_memory or sqlalchemy.")
+        if self.storage_mode not in {"in_memory", "local", "s3"}:
+            raise SettingsError("AQLIO_STORAGE_MODE must be in_memory, local, or s3.")
         if self.app_env in {"pilot", "production"}:
             required = {
                 "DATABASE_URL": self.database_url,
                 "OBJECT_STORAGE_ENDPOINT": self.object_storage_endpoint,
                 "OBJECT_STORAGE_BUCKET": self.object_storage_bucket,
+                "OBJECT_STORAGE_ACCESS_KEY_ID": self.object_storage_access_key_id,
+                "OBJECT_STORAGE_SECRET_ACCESS_KEY": self.object_storage_secret_access_key,
+                "OIDC_CLIENT_ID": self.oidc_client_id,
+                "OIDC_CLIENT_SECRET": self.oidc_client_secret,
+                "OIDC_REDIRECT_URI": self.oidc_redirect_uri,
             }
             if self.auth_mode != "oidc" or self.oidc_provider != "google":
                 raise SettingsError("Pilot authentication must use the configured Google sign-in.")
-            if self.ai_mode != "managed":
-                raise SettingsError("Pilot AI mode must be managed.")
-            if not self.openai_generation_model or not self.openai_embedding_model:
+            if self.persistence_mode != "sqlalchemy":
+                raise SettingsError("Pilot persistence must use the durable database adapter.")
+            if self.storage_mode != "s3":
+                raise SettingsError("Pilot document storage must use private storage.")
+            if self.ai_mode == "managed":
                 required["OPENAI_GENERATION_MODEL"] = self.openai_generation_model
                 required["OPENAI_EMBEDDING_MODEL"] = self.openai_embedding_model
             missing = [name for name, value in required.items() if not value]

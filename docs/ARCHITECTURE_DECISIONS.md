@@ -46,3 +46,23 @@ See `M0_ARCHITECTURE_DECISIONS_2026-08-29.md` for the complete approved decision
 
 **Status:** Accepted
 **Decision:** Deploy snapshots the project name, assistant configuration, prepared asset identifiers, and source chunks into a frozen publication. Sharing state is separate so it can change or be revoked without mutating the publication.
+
+## ADR-010 — Durable state and transaction boundaries
+
+**Status:** Accepted for Phase 3
+**Decision:** SQLAlchemy repositories persist application state in PostgreSQL-compatible tables managed by Alembic. Multi-record commands use application-level transaction boundaries. Expected preparation and AI rejections commit their failure/usage evidence rather than rolling it back.
+
+## ADR-011 — Private object storage and compensating cleanup
+
+**Status:** Accepted for Phase 3
+**Decision:** Uploaded bytes use server-generated workspace/project-scoped keys in private S3-compatible storage. Database metadata is authoritative. If metadata persistence fails after upload, the service attempts compensating object deletion; malformed or cross-project keys are rejected.
+
+## ADR-012 — OIDC identity is not authorization
+
+**Status:** Accepted for Phase 3
+**Decision:** Streamlit validates Google OIDC. A stable provider/subject mapping identifies the user, while persisted membership, active state, ownership, and admin status authorize every server-side operation. A returning disabled user stays disabled.
+
+## ADR-013 — Replaceable rate limiting
+
+**Status:** Accepted for Phase 3
+**Decision:** Upload, preparation, AI, and shared-link entry points use a rate-limit port. The Phase 3 implementation is process-local and suitable for the single-instance pilot; a shared backend is required before horizontal scaling.

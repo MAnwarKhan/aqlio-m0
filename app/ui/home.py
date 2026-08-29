@@ -4,14 +4,23 @@ from __future__ import annotations
 
 import streamlit as st
 
-from app.application import M0Service, build_development_foundation
+from app.application import M0Service, OperationsService, build_runtime_foundation
 from app.application.errors import AqlioError, ShareAccessError
+from app.config import Settings, SettingsError
 from app.domain import AssetStatus, ProjectStatus
+from app.ports import AuthenticationRequired
 
 
 @st.cache_resource
 def _service() -> M0Service:
-    foundation = build_development_foundation()
+    settings = Settings.from_env()
+
+    def claims_loader():  # type: ignore[no-untyped-def]
+        if not getattr(st.user, "is_logged_in", False):
+            return {}
+        return dict(st.user)
+
+    foundation = build_runtime_foundation(settings, claims_loader=claims_loader)
     return M0Service(
         settings=foundation.settings,
         auth=foundation.auth,
@@ -21,21 +30,35 @@ def _service() -> M0Service:
         embedding=foundation.embedding,
         repository=foundation.state,
         storage=foundation.storage,
+        rate_limiter=foundation.rate_limiter,
     )
 
 
 def render_home() -> None:
     st.set_page_config(page_title="Aqlio", page_icon="✨", layout="centered")
-    service = _service()
+    try:
+        service = _service()
+    except (SettingsError, ValueError):
+        st.error("Aqlio could not start safely. Please contact support.")
+        return
     share_token = st.query_params.get("share")
     if share_token:
         _render_shared(service, share_token)
         return
+    if service.settings.auth_mode == "oidc" and not getattr(st.user, "is_logged_in", False):
+        st.title("Welcome to Aqlio")
+        st.write("Sign in to continue to your workspace.")
+        if st.button("Sign in", type="primary"):
+            st.login("google")
+        return
     try:
         user = service.auth.current_user()
         workspace = service.resolve_workspace()
-    except AqlioError:
+    except (AqlioError, AuthenticationRequired):
         st.error("Aqlio could not start safely. Please contact support.")
+        return
+    if st.query_params.get("operations") == "1":
+        _render_operations(service)
         return
     st.title("Welcome to Aqlio")
     st.caption(workspace.name)
@@ -223,3 +246,21 @@ def _render_shared(service: M0Service, token: str) -> None:
     st.header(assistant.project_name)
     st.write("This assistant is available through a shared link.")
     st.caption("Sources included: " + ", ".join(assistant.source_names))
+
+
+def _render_operations(service: M0Service) -> None:
+    st.title("Aqlio Operations")
+    operations = OperationsService(service.auth, service.repository, service.clock)
+    try:
+        snapshot = operations.snapshot()
+    except AqlioError as exc:
+        st.error(str(exc))
+        return
+    st.metric("Users", snapshot.user_count)
+    st.metric("Projects", snapshot.project_count)
+    st.metric("Failed document preparations", snapshot.failed_preparation_count)
+    st.metric("Usage events", snapshot.usage_event_count)
+    st.metric("Failed assistant runs", snapshot.failed_ai_run_count)
+    st.metric("Shared assistants", snapshot.shared_count)
+    st.metric("Revoked links", snapshot.revoked_count)
+    st.write(f"Assistant service: {snapshot.provider_status}")

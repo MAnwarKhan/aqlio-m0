@@ -1,6 +1,7 @@
 """Protocols used by application code instead of external implementations."""
 
 from collections.abc import Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
@@ -20,6 +21,10 @@ from app.domain.models import (
     Workspace,
     WorkspaceMember,
 )
+
+
+class AuthenticationRequired(RuntimeError):
+    """Authentication boundary did not provide a valid identity."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,7 +81,11 @@ class ProjectRepositoryPort(Protocol):
 
 
 class M0RepositoryPort(Protocol):
+    def transaction(self) -> AbstractContextManager[None]: ...
+
     def save_user(self, user: User) -> None: ...
+
+    def get_user(self, user_id: str) -> User | None: ...
 
     def get_workspace_for_user(self, user_id: str) -> Workspace | None: ...
 
@@ -114,6 +123,10 @@ class M0RepositoryPort(Protocol):
 
     def usage_count_for_user(self, user_id: str) -> int: ...
 
+    def get_daily_allowance(self, user_id: str) -> int | None: ...
+
+    def set_daily_allowance(self, user_id: str, limit: int, updated_at: datetime) -> None: ...
+
     def save_lifecycle(self, event: LifecycleEvent) -> None: ...
 
     def save_audit(self, event: AuditEvent) -> None: ...
@@ -132,6 +145,20 @@ class M0RepositoryPort(Protocol):
 
     def find_share_link_by_hash(self, token_hash: str) -> ShareLink | None: ...
 
+    def list_users(self) -> list[User]: ...
+
+    def list_all_projects(self) -> list[Project]: ...
+
+    def list_failed_assets(self) -> list[Asset]: ...
+
+    def list_usage_events(self) -> list[UsageEvent]: ...
+
+    def list_share_links(self) -> list[ShareLink]: ...
+
+    def list_lifecycle_events(self) -> list[LifecycleEvent]: ...
+
+    def list_audit_events(self) -> list[AuditEvent]: ...
+
 
 class StoragePort(Protocol):
     def put(self, *, workspace_id: str, project_id: str, content: bytes) -> str: ...
@@ -139,3 +166,7 @@ class StoragePort(Protocol):
     def get(self, *, workspace_id: str, project_id: str, storage_key: str) -> bytes: ...
 
     def delete(self, *, workspace_id: str, project_id: str, storage_key: str) -> None: ...
+
+
+class RateLimitPort(Protocol):
+    def allow(self, *, subject: str, operation: str, limit: int, window_seconds: int) -> bool: ...
