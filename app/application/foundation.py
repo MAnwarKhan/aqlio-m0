@@ -8,6 +8,7 @@ from app.adapters import (
     FakeClock,
     FakeEmbeddingAdapter,
     FakeGenerationAdapter,
+    InMemoryM0Repository,
     InMemoryProjectRepository,
     InMemoryStorageAdapter,
 )
@@ -18,6 +19,7 @@ from app.ports import (
     EmbeddingPort,
     GenerationPort,
     IdPort,
+    M0RepositoryPort,
     ProjectRepositoryPort,
     StoragePort,
 )
@@ -32,6 +34,7 @@ class Foundation:
     generation: GenerationPort
     embedding: EmbeddingPort
     projects: ProjectRepositoryPort
+    state: M0RepositoryPort
     storage: StoragePort
 
 
@@ -47,5 +50,6 @@ def build_development_foundation(settings: Settings | None = None) -> Foundation
         generation=FakeGenerationAdapter(),
         embedding=FakeEmbeddingAdapter(),
         projects=InMemoryProjectRepository(),
+        state=InMemoryM0Repository(),
         storage=InMemoryStorageAdapter(),
     )

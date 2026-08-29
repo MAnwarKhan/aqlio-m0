@@ -6,6 +6,7 @@ from app.ports.contracts import (
     EmbeddingPort,
     GenerationPort,
     IdPort,
+    M0RepositoryPort,
     ProjectRepositoryPort,
     StoragePort,
 )
@@ -16,6 +17,7 @@ __all__ = [
     "EmbeddingPort",
     "GenerationPort",
     "IdPort",
+    "M0RepositoryPort",
     "ProjectRepositoryPort",
     "StoragePort",
 ]

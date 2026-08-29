@@ -1,6 +1,6 @@
 # Aqlio M0 — Ask My Documents
 
-Aqlio M0 is a guided Streamlit prototype for non-technical participants to create, test, and publish a document-question-answering assistant. Phase 1 provides a deterministic foundation only; it intentionally makes no paid AI calls and needs no production credentials.
+Aqlio M0 is a guided Streamlit prototype for non-technical participants to create, test, publish, and share a document-question-answering assistant. Phase 2 provides the complete deterministic journey; it intentionally makes no paid AI calls and needs no production credentials.
 
 ## Requirements
 
@@ -18,7 +18,18 @@ cp .env.example .env
 streamlit run streamlit_app.py
 ```
 
-The default development configuration uses deterministic authentication and fake AI adapters. Never add real secrets to `.env.example` or commit `.env`/`.streamlit/secrets.toml`.
+The default development configuration uses deterministic authentication, local in-memory repositories/storage, and fake AI adapters. Never add real secrets to `.env.example` or commit `.env`/`.streamlit/secrets.toml`.
+
+## Deterministic journey
+
+1. Enter with the development identity and resolve an individual workspace.
+2. Create an Ask My Documents project.
+3. Add and prepare a PDF, DOCX, or TXT document.
+4. Test a grounded answer and inspect its source citation.
+5. Confirm readiness and deploy an immutable private publication.
+6. Open the assistant, explicitly enable link sharing, and stop sharing when desired.
+
+All authoritative state flows through application/domain/repository boundaries. Streamlit session state holds only transient navigation and display conveniences. Restart persistence arrives with approved Phase 3 PostgreSQL and private file-storage adapters.
 
 ## Quality checks
 
@@ -36,6 +47,6 @@ Configuration uses environment variables. Development defaults are safe and cred
 
 ## Architecture
 
-Streamlit UI remains thin. Domain rules do not import Streamlit or vendors. Authentication, persistence, storage, generation, embedding, clock, and ID behavior live behind ports. Phase 1 supplies deterministic in-memory/local adapters; approved production adapters arrive in later phases.
+Streamlit UI remains thin. Domain rules do not import Streamlit or vendors. Authentication, persistence, storage, generation, embedding, clock, and ID behavior live behind ports. Phase 2 uses deterministic in-memory/local adapters and project/version-scoped retrieval; approved production adapters arrive in later phases.
 
 Participant-facing Deploy means freezing and publishing an immutable assistant version inside Aqlio—not provisioning infrastructure.

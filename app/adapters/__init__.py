@@ -6,6 +6,7 @@ from app.adapters.deterministic import (
     FakeClock,
     FakeEmbeddingAdapter,
     FakeGenerationAdapter,
+    InMemoryM0Repository,
     InMemoryProjectRepository,
     InMemoryStorageAdapter,
 )
@@ -16,6 +17,7 @@ __all__ = [
     "FakeClock",
     "FakeEmbeddingAdapter",
     "FakeGenerationAdapter",
+    "InMemoryM0Repository",
     "InMemoryProjectRepository",
     "InMemoryStorageAdapter",
 ]

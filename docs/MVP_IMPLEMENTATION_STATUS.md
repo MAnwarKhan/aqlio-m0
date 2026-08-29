@@ -3,15 +3,15 @@
 **Audit date:** 2026-08-29  
 **Repository:** `MAnwarKhan/aqlio-m0`  
 **Branch audited:** `main` at `697ecea`  
-**Current phase:** Phase 1 — deterministic foundation complete
+**Current phase:** Phase 2 — deterministic Ask My Documents journey complete
 
 ## Executive summary
 
-The repository began as a specification-only repository. Phase 1 now provides a runnable, credential-free Python/Streamlit foundation with framework-independent domain rules, replaceable ports, deterministic development adapters, typed configuration, structured redaction, tests, CI, and setup/deployment documentation.
+The repository began as a specification-only repository. Phases 1–2 now provide a runnable, credential-free Python/Streamlit application proving the complete deterministic Ask My Documents journey with framework-independent rules, replaceable ports, typed configuration, isolation enforcement, tests, CI, and documentation.
 
 The repository-level instructions define a narrower M0 than the broad MVP master prompt: one Streamlit-based **Ask My Documents** journey for a non-technical participant. Those instructions make the first three M0 documents authoritative and treat the broader MVP specification as future context. The safest next implementation is therefore the smallest deterministic M0 vertical slice, while preserving provider and persistence interfaces that can later support the broader modular-monolith MVP.
 
-The Ask My Documents product journey, durable PostgreSQL/object-storage persistence, OIDC, and managed AI remain later phases by design.
+The complete local product journey works without production credentials. Durable PostgreSQL/private file-storage persistence, OIDC, and managed AI remain later phases by design.
 
 ## Repository inventory
 
@@ -42,12 +42,18 @@ The filenames referenced inside `AGENTS.md` do not exactly match the committed f
 - Deterministic identity, IDs, clock, fake generation/embeddings, in-memory storage, and isolation-aware project repository are implemented.
 - Development startup requires no production credentials and makes no paid AI calls.
 - Structured logging redacts sensitive fields by default.
+- Individual workspaces and owner memberships resolve through application/repository boundaries.
+- Participants can create Ask My Documents projects; validate, store, and prepare PDF/DOCX/TXT files; test grounded answers; see citations; receive honest abstentions; confirm readiness; and deploy.
+- Retrieval is constrained to the authorized current project version and explicitly tested for horizontal isolation.
+- Deterministic generation exercises allowance enforcement and auditable zero-cost usage records.
+- Publications snapshot immutable project/configuration/document/chunk state and start private.
+- Link-only sharing supports clean-session access and idempotent revocation without exposing mutable drafts.
+- Lifecycle and security-significant audit records cover the deterministic journey.
 
 ## PARTIAL
 
-- The Streamlit UI is intentionally a minimal Phase 1 welcome screen; project creation and journey screens remain Phase 2.
-- Persistence/storage ports exist, but current adapters are deterministic and in-memory only.
-- Source documents describe PostgreSQL, private object storage, provider adapters, usage limits, immutable versions, and sharing, but none are implemented.
+- The complete UI and application journey are implemented, but persistence/storage remain process-local.
+- Provider-neutral deterministic AI and usage boundaries work; managed provider/fallback and durable ledgers remain future phases.
 - The master prompt requests a modular monolith and Railway-ready MVP, while repository instructions prescribe a Streamlit Community Cloud M0 prototype first. The proposed module boundaries can support both, but the immediate deployment target needs an explicit phase boundary.
 - Organization, portfolio, verification, administration, BYO-provider credentials, and broader project types are specified in the master MVP but intentionally outside or beyond the repository's initial M0 journey.
 
@@ -61,33 +67,21 @@ The filenames referenced inside `AGENTS.md` do not exactly match the committed f
 ### Identity, authorization, and tenancy
 
 - Registration, login, logout, secure sessions, user activation state, and server-side roles.
-- Automatic individual workspace creation and membership.
-- Server-side project/document/publication ownership checks and horizontal-isolation tests.
 - Staff/admin authorization for protected diagnostics.
 
 ### Domain and persistence
 
-- Domain entities, status enums, transition rules, immutable versions, audit/lifecycle events, and readiness rules.
-- Repository/unit-of-work interfaces and implementations.
 - PostgreSQL schema, typed persistence layer, migrations, indexes, uniqueness constraints, and cascade/deletion policy.
-- Required M0 records for users/workspaces/memberships, projects/versions, assets/ingestion jobs/chunks, chats/runs, usage/allowances, publications/shares, and audit events.
-- Development seed data and deterministic IDs/clocks for testing.
+- Durable implementations of M0 records and unit-of-work transactions.
 
 ### Ask My Documents workflow
 
-- Workspace, project creation, single-template selection, guided onboarding, and navigation guards.
-- Private upload, server-side type/size validation, safe filenames, project-scoped storage, extraction, chunking, embedding, and idempotent preparation.
-- Retrieval constrained to the authorized project/version.
-- Prompt-injection defenses, grounded answers, visible citations, honest abstention, and guided test questions.
-- Readiness confirmation, deployment/publishing state machine, immutable published assistant version, link visibility, revocation, and clean-session access.
 - Portfolio suggestion/evidence flow.
 
 ### AI gateway, usage, and cost
 
-- Provider-neutral generation/embedding contracts and normalized responses/errors.
-- Deterministic fake AI and embedding adapters.
 - Managed provider adapter, server-controlled routing, bounded fallback, timeout, and retry behavior.
-- Auditable usage ledger, configurable allowances/budgets, pre-call enforcement, estimated cost metadata, and user-facing usage screen.
+- Durable usage ledger, administrator-configurable allowances/budgets, estimated provider cost, and usage UI.
 
 ### Operations and administration
 
@@ -97,15 +91,13 @@ The filenames referenced inside `AGENTS.md` do not exactly match the committed f
 
 ### Verification
 
-- Unit, integration, evaluation, end-to-end, authorization, privacy, accessibility, and failure-recovery tests.
-- Fixture corpus and citation-quality/abstention evaluation thresholds.
-- A complete happy-path acceptance test without paid external calls.
+- Pilot integration, restart-persistence, OIDC, object-storage, operations, accessibility, backup/restore, and managed-provider tests.
 
 ## BLOCKED
 
 No approved architecture decision is blocked. The Aqlio M0 Architecture Decision Addendum dated 2026-08-29 authorizes Streamlit native OIDC with Google; Railway PostgreSQL using SQLAlchemy 2.x, Alembic, and psycopg 3; private Railway S3-compatible storage; provider-neutral AI ports with deterministic fakes and OpenAI as the first managed adapter; Streamlit Community Cloud for the M0 pilot; and Railway for the later broader MVP.
 
-External service credentials and provisioned pilot resources will be required only when their approved implementation phases begin. They do not block Phase 1 or Phase 2.
+External service credentials and provisioned pilot resources will be required only when their approved implementation phases begin. They do not block completed Phases 1–2.
 
 ## OUT OF SCOPE
 
@@ -178,6 +170,6 @@ No migration can be generated until the initial schema and persistence choice ar
 7. Unbounded retries, duplicate ingestion/publication, and cost amplification.
 8. Admin/diagnostic functions protected only by UI visibility rather than server-side authorization.
 
-## Phase 0 conclusion
+## Current conclusion
 
-Phase 0 is complete and its architecture blockers are resolved. Phase 1 has turned the repository into a runnable deterministic foundation. The next action is Phase 2: implement the smallest complete local Ask My Documents journey on the existing ports, keeping it credential-free and horizontally isolated.
+Phases 0–2 are complete. The repository now proves the entire local Ask My Documents acceptance journey with deterministic adapters and horizontal-isolation tests. The next action is Phase 3: implement the approved durable pilot infrastructure without changing participant behavior.

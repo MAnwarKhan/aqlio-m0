@@ -8,6 +8,8 @@ version = "0.1.0"
 description = "Deterministic foundation for Aqlio M0 — Ask My Documents"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+  "pypdf==6.0.0",
+  "python-docx==1.2.0",
   "streamlit==1.49.1",
 ]
 

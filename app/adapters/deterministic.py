@@ -6,7 +6,21 @@ from copy import deepcopy
 from datetime import UTC, datetime
 from itertools import count
 
-from app.domain.models import Project, User
+from app.domain.models import (
+    Asset,
+    AuditEvent,
+    DocumentChunk,
+    GuidedTest,
+    LifecycleEvent,
+    Project,
+    ProjectVersion,
+    Publication,
+    ShareLink,
+    UsageEvent,
+    User,
+    Workspace,
+    WorkspaceMember,
+)
 from app.ports.contracts import Citation, GenerationRequest, GenerationResponse
 
 
@@ -49,7 +63,11 @@ class FakeEmbeddingAdapter:
 
 
 class FakeGenerationAdapter:
+    def __init__(self) -> None:
+        self.call_count = 0
+
     def generate(self, request: GenerationRequest) -> GenerationResponse:
+        self.call_count += 1
         if not request.context:
             return GenerationResponse(
                 answer="I couldn't establish that from the documents provided.",
@@ -93,3 +111,134 @@ class InMemoryStorageAdapter:
 
     def delete(self, *, workspace_id: str, project_id: str, storage_key: str) -> None:
         del self._objects[(workspace_id, project_id, storage_key)]
+
+
+class InMemoryM0Repository:
+    """Authorization-neutral state store; application services enforce access."""
+
+    def __init__(self) -> None:
+        self.users: dict[str, User] = {}
+        self.workspaces: dict[str, Workspace] = {}
+        self.members: dict[tuple[str, str], WorkspaceMember] = {}
+        self.projects: dict[str, Project] = {}
+        self.assets: dict[str, Asset] = {}
+        self.versions: dict[str, ProjectVersion] = {}
+        self.chunks: dict[str, DocumentChunk] = {}
+        self.guided_tests: list[GuidedTest] = []
+        self.usage_events: list[UsageEvent] = []
+        self.lifecycle_events: list[LifecycleEvent] = []
+        self.audit_events: list[AuditEvent] = []
+        self.publications: dict[str, Publication] = {}
+        self.publication_commands: dict[str, str] = {}
+        self.share_links: dict[str, ShareLink] = {}
+
+    def save_user(self, user: User) -> None:
+        self.users[user.id] = deepcopy(user)
+
+    def get_workspace_for_user(self, user_id: str) -> Workspace | None:
+        for (workspace_id, member_user_id), _member in self.members.items():
+            if member_user_id == user_id:
+                return deepcopy(self.workspaces[workspace_id])
+        return None
+
+    def save_workspace(self, workspace: Workspace, member: WorkspaceMember) -> None:
+        self.workspaces[workspace.id] = deepcopy(workspace)
+        self.members[(member.workspace_id, member.user_id)] = deepcopy(member)
+
+    def is_workspace_member(self, workspace_id: str, user_id: str) -> bool:
+        return (workspace_id, user_id) in self.members
+
+    def save_project(self, project: Project) -> None:
+        self.projects[project.id] = deepcopy(project)
+
+    def get_project(self, project_id: str) -> Project | None:
+        project = self.projects.get(project_id)
+        return deepcopy(project) if project else None
+
+    def list_projects_for_user(self, user_id: str) -> list[Project]:
+        return [
+            deepcopy(project)
+            for project in self.projects.values()
+            if project.owner_user_id == user_id
+        ]
+
+    def save_asset(self, asset: Asset) -> None:
+        self.assets[asset.id] = deepcopy(asset)
+
+    def get_asset(self, asset_id: str) -> Asset | None:
+        asset = self.assets.get(asset_id)
+        return deepcopy(asset) if asset else None
+
+    def list_assets(self, project_id: str) -> list[Asset]:
+        return [deepcopy(asset) for asset in self.assets.values() if asset.project_id == project_id]
+
+    def find_asset_by_checksum(self, project_id: str, checksum: str) -> Asset | None:
+        for asset in self.assets.values():
+            if asset.project_id == project_id and asset.checksum == checksum:
+                return deepcopy(asset)
+        return None
+
+    def save_version(self, version: ProjectVersion) -> None:
+        self.versions[version.id] = version
+
+    def get_version(self, version_id: str) -> ProjectVersion | None:
+        return self.versions.get(version_id)
+
+    def version_count(self, project_id: str) -> int:
+        return sum(version.project_id == project_id for version in self.versions.values())
+
+    def replace_chunks(self, asset_id: str, chunks: Sequence[DocumentChunk]) -> None:
+        self.chunks = {
+            chunk_id: chunk for chunk_id, chunk in self.chunks.items() if chunk.asset_id != asset_id
+        }
+        self.chunks.update({chunk.id: chunk for chunk in chunks})
+
+    def list_chunks(self, project_id: str, version_id: str) -> list[DocumentChunk]:
+        return [
+            chunk
+            for chunk in self.chunks.values()
+            if chunk.project_id == project_id and chunk.project_version_id == version_id
+        ]
+
+    def save_guided_test(self, test: GuidedTest) -> None:
+        self.guided_tests.append(test)
+
+    def save_usage(self, event: UsageEvent) -> None:
+        self.usage_events.append(event)
+
+    def usage_count_for_user(self, user_id: str) -> int:
+        return sum(
+            event.user_id == user_id and event.status == "SUCCEEDED" for event in self.usage_events
+        )
+
+    def save_lifecycle(self, event: LifecycleEvent) -> None:
+        self.lifecycle_events.append(event)
+
+    def save_audit(self, event: AuditEvent) -> None:
+        self.audit_events.append(event)
+
+    def save_publication(self, publication: Publication) -> None:
+        self.publications[publication.id] = publication
+
+    def get_publication(self, publication_id: str) -> Publication | None:
+        return self.publications.get(publication_id)
+
+    def get_publication_for_idempotency(self, key: str) -> Publication | None:
+        publication_id = self.publication_commands.get(key)
+        return self.publications.get(publication_id) if publication_id else None
+
+    def bind_publication_idempotency(self, key: str, publication_id: str) -> None:
+        self.publication_commands[key] = publication_id
+
+    def save_share_link(self, link: ShareLink) -> None:
+        self.share_links[link.publication_id] = deepcopy(link)
+
+    def get_share_link(self, publication_id: str) -> ShareLink | None:
+        link = self.share_links.get(publication_id)
+        return deepcopy(link) if link else None
+
+    def find_share_link_by_hash(self, token_hash: str) -> ShareLink | None:
+        for link in self.share_links.values():
+            if link.token_hash == token_hash:
+                return deepcopy(link)
+        return None
