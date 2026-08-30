@@ -161,6 +161,7 @@ class SQLAlchemyM0Repository:
                     owner_user_id=project.owner_user_id,
                     name=project.name,
                     description=project.description,
+                    journey_metadata=dict(project.metadata),
                     status=project.status.value,
                     valid_document_count=project.valid_document_count,
                     prepared_document_count=project.prepared_document_count,
@@ -238,6 +239,7 @@ class SQLAlchemyM0Repository:
                     number=version.number,
                     template=version.assistant_config.get("template", "ASK_MY_DOCUMENTS"),
                     policy=version.assistant_config.get("policy", "GROUNDED_OR_ABSTAIN"),
+                    assistant_config=dict(version.assistant_config),
                     created_at=version.created_at,
                 )
             )
@@ -272,7 +274,7 @@ class SQLAlchemyM0Repository:
                 row.project_id,
                 row.number,
                 assets,
-                {"template": row.template, "policy": row.policy},
+                {"template": row.template, "policy": row.policy, **row.assistant_config},
                 row.created_at,
             )
 
@@ -437,6 +439,7 @@ class SQLAlchemyM0Repository:
                     project_name=publication.project_name,
                     template=publication.assistant_config.get("template", "ASK_MY_DOCUMENTS"),
                     policy=publication.assistant_config.get("policy", "GROUNDED_OR_ABSTAIN"),
+                    assistant_config=dict(publication.assistant_config),
                     created_at=publication.created_at,
                     idempotency_key=f"pending:{publication.id}",
                 )
@@ -591,7 +594,7 @@ class SQLAlchemyM0Repository:
             readiness_confirmed=row.readiness_confirmed,
             created_at=row.created_at,
             updated_at=row.updated_at,
-            metadata={"template": row.template},
+            metadata={**row.journey_metadata, "template": row.template},
             description=row.description,
             current_version_id=row.current_version_id,
         )
@@ -636,7 +639,7 @@ class SQLAlchemyM0Repository:
             row.owner_user_id,
             row.project_name,
             row.created_at,
-            {"template": row.template, "policy": row.policy},
+            {"template": row.template, "policy": row.policy, **row.assistant_config},
             assets,
             chunks,
         )

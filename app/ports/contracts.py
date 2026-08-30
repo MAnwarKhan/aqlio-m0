@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Protocol
+from typing import Literal, Protocol
 
 from app.domain.models import (
     Asset,
@@ -59,6 +59,8 @@ class RetrievedContext:
 class GenerationRequest:
     question: str
     context: Sequence[RetrievedContext]
+    purpose: Literal["document_answer", "idea_evaluation"] = "document_answer"
+    answer_length: Literal["standard", "short"] = "standard"
 
 
 @dataclass(frozen=True, slots=True)

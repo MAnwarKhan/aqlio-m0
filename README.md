@@ -1,6 +1,9 @@
-# Aqlio M0 — Ask My Documents
+# Aqlio M0 — Turn ideas into working AI solutions
 
-Aqlio M0 is a guided Streamlit prototype for non-technical participants to create, test, publish, and share a document-question-answering assistant. Phase 4 adds optional managed document intelligence while preserving deterministic, credential-free development and CI.
+Aqlio guides nontechnical participants from an idea through definition, building, testing,
+improving, running, and optional Aqlio-hosted publication. **Ask My Documents is the only
+implemented solution template**, not the permanent platform boundary. Multiple projects
+are independently saved through existing persistence interfaces.
 
 ## Requirements
 
@@ -23,13 +26,21 @@ The default development configuration uses deterministic authentication, local i
 ## Deterministic journey
 
 1. Enter with the development identity and resolve an individual workspace.
-2. Create an Ask My Documents project.
-3. Add and prepare a PDF, DOCX, or TXT document.
-4. Test a grounded answer and inspect its source citation.
-5. Confirm readiness and deploy an immutable private publication.
-6. Open the assistant, explicitly enable link sharing, and stop sharing when desired.
+2. Describe an idea; optionally evaluate it, then define a small first solution.
+3. Start building with the document-assistant template. Selecting PDF, DOCX, or TXT files
+   automatically adds and prepares them; failures show a retry action.
+4. Test answers with sources. Improve answer length or add better source documents and retest.
+5. Run the working application inside Aqlio. Deployment is optional and private by default.
+6. Deploy a stable version in one action; explicitly enable sharing and revoke it when desired.
+7. Return through My Projects or start another independent project.
 
-All authoritative state flows through application/domain/repository boundaries. Streamlit session state holds only transient navigation and display conveniences. SQLAlchemy/Alembic and private local or S3-compatible storage provide restart-safe pilot state.
+All authoritative state flows through application/domain/repository boundaries. Streamlit session
+state holds only transient navigation, upload-attempt suppression, and display conveniences.
+**The default in-memory, shared-development-identity smoke environment is not durable or
+multi-user pilot-ready.** It must use sample data only. Restart persistence is tested locally
+through SQLAlchemy and private local storage; live PostgreSQL/S3/OIDC validation remains pending.
+
+See `docs/PRODUCT_JOURNEY_REVISION.md` for scope, regression evidence, migration, and smoke checks.
 
 ## Quality checks
 

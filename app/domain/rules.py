@@ -25,9 +25,14 @@ _ALLOWED_TRANSITIONS: dict[ProjectStatus, frozenset[ProjectStatus]] = {
         {ProjectStatus.PREPARED, ProjectStatus.READY, ProjectStatus.ARCHIVED}
     ),
     ProjectStatus.READY: frozenset(
-        {ProjectStatus.TESTED, ProjectStatus.DEPLOYED, ProjectStatus.ARCHIVED}
+        {
+            ProjectStatus.TESTED,
+            ProjectStatus.PREPARED,
+            ProjectStatus.DEPLOYED,
+            ProjectStatus.ARCHIVED,
+        }
     ),
-    ProjectStatus.DEPLOYED: frozenset({ProjectStatus.ARCHIVED}),
+    ProjectStatus.DEPLOYED: frozenset({ProjectStatus.PREPARED, ProjectStatus.ARCHIVED}),
     ProjectStatus.ARCHIVED: frozenset({ProjectStatus.DRAFT}),
 }
 

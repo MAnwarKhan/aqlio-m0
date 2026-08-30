@@ -150,3 +150,65 @@ def test_sqlalchemy_repository_preserves_horizontal_isolation(
         outsider.ask_question(project.id, "When is leave available?")
     with pytest.raises(AuthorizationError):
         outsider.deploy(project.id, idempotency_key="outsider")
+
+
+def test_journey_and_version_configuration_survive_restart(tmp_path, monkeypatch):
+    url = f"sqlite:///{tmp_path / 'journey.db'}"
+    root = tmp_path / "private"
+    migrate(url, monkeypatch)
+    service = service_for(url, root)
+    project = service.create_idea("Help employees understand policies")
+    service.update_definition(
+        project.id,
+        {
+            "problem": "Hard to find answers",
+            "users": "Employees",
+            "outcome": "Clear answers",
+            "ai_role": "Explain documents",
+            "information": "Handbooks",
+        },
+    )
+    service.define_solution(project.id)
+    service.evaluate_idea(project.id)
+    service.add_and_prepare_document(
+        project.id, "handbook.txt", fixture_bytes("employee_handbook.txt")
+    )
+    service.improve_application(project.id, "Shorter answers", answer_length="short")
+    question = "When is annual leave available?"
+    service.ask_question(project.id, question, guided=True)
+    service.run_application(project.id, question)
+    publication = service.publish_working_application(project.id)
+    receipt = service.enable_link_sharing(publication.id)
+    restarted = service_for(url, root)
+    loaded = restarted.get_my_project(project.id)
+    assert loaded.metadata["problem"] == "Hard to find answers"
+    assert loaded.metadata["defined"] == "true"
+    assert "Problem:" in loaded.metadata["idea_evaluation"]
+    assert loaded.metadata["run_version_id"] == loaded.current_version_id
+    assert loaded.metadata["publication_id"] == publication.id
+    assert restarted.repository.get_version(loaded.current_version_id).assistant_config == {
+        "template": "ASK_MY_DOCUMENTS",
+        "policy": "GROUNDED_OR_ABSTAIN",
+        "answer_length": "short",
+        "improvement_request": "Shorter answers",
+    }
+    assert restarted.repository.get_publication(publication.id).assistant_config == (
+        publication.assistant_config
+    )
+    before = restarted.ask_shared(receipt.token, question)
+    restarted.improve_application(project.id, "Standard answers", answer_length="standard")
+    assert restarted.ask_shared(receipt.token, question).text == before.text
+
+
+def test_journey_migration_upgrades_existing_rows(tmp_path, monkeypatch):
+    url = f"sqlite:///{tmp_path / 'upgrade.db'}"
+    migrate(url, monkeypatch)
+    service = service_for(url, tmp_path / "private")
+    project = service.create_project("Existing project")
+    # Simulate the previous schema with real rows, then apply the additive migration.
+    config = Config("alembic.ini")
+    command.downgrade(config, "20260829_0002")
+    command.upgrade(config, "head")
+    loaded = service_for(url, tmp_path / "private").get_my_project(project.id)
+    assert loaded.name == "Existing project"
+    assert loaded.metadata == {"template": "ASK_MY_DOCUMENTS"}

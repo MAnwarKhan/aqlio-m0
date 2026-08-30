@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import wraps
 
 from app.application.documents import (
@@ -196,12 +196,187 @@ class M0Service:
         self.resolve_workspace()
         return self.repository.list_projects_for_user(user.id)
 
+    @transactional
+    def create_idea(self, idea: str) -> Project:
+        idea = self._journey_text(idea)
+        if not idea:
+            raise ValidationError("Describe your idea to continue.")
+        project = self.create_project(" ".join(idea.split())[:80], idea[:500])
+        project.metadata["idea"] = idea
+        self.repository.save_project(project)
+        return project
+
+    @staticmethod
+    def _journey_text(value: str) -> str:
+        if len(value) > 2000:
+            raise ValidationError("Keep each description to 2,000 characters or fewer.")
+        return value.strip()
+
+    @transactional
+    def update_definition(self, project_id: str, fields: dict[str, str]) -> Project:
+        project = self._authorized_project(project_id)
+        allowed = {"idea", "problem", "users", "outcome", "ai_role", "information"}
+        if not fields.keys() <= allowed:
+            raise ValidationError("Use the solution definition fields provided.")
+        cleaned = {key: self._journey_text(value) for key, value in fields.items()}
+        if "idea" in cleaned and not cleaned["idea"]:
+            raise ValidationError("Describe your idea to continue.")
+        if cleaned.get("idea", project.metadata.get("idea")) != project.metadata.get("idea"):
+            project.metadata.pop("idea_evaluation", None)
+        project.metadata.update(cleaned)
+        project.updated_at = self.clock.now()
+        self.repository.save_project(project)
+        return project
+
+    @transactional
+    def define_solution(self, project_id: str) -> Project:
+        project = self._authorized_project(project_id)
+        if not all(
+            project.metadata.get(key)
+            for key in ("idea", "problem", "users", "outcome", "ai_role", "information")
+        ):
+            raise ValidationError("Add a short description in each field before building.")
+        project.metadata["defined"] = "true"
+        self.repository.save_project(project)
+        self._lifecycle(project.id, "SOLUTION_DEFINED", {})
+        return project
+
+    def evaluate_idea(self, project_id: str) -> str:
+        project = self._authorized_project(project_id)
+        idea = project.metadata.get("idea", "")
+        if not idea:
+            raise ValidationError("Describe your idea first.")
+        self._limit(project.owner_user_id, "evaluate_idea", self.settings.ai_rate_limit)
+        correlation_id = self.ids.new_id()
+        if not self._has_allowance(project.owner_user_id):
+            self._usage(project, correlation_id, "REJECTED", operation="EVALUATE_IDEA")
+            raise AllowanceExceeded(
+                "You've reached your Aqlio AI usage allowance. You can still continue."
+            )
+        try:
+            response = self.generation.generate(GenerationRequest(idea, (), "idea_evaluation"))
+        except ProviderCallError as exc:
+            self._provider_failure(project, correlation_id, "EVALUATE_IDEA", exc)
+            raise
+        self._usage(
+            project, correlation_id, "SUCCEEDED", operation="EVALUATE_IDEA", usage=response.usage
+        )
+        project.metadata["idea_evaluation"] = response.answer
+        self.repository.save_project(project)
+        return response.answer
+
+    @transactional
+    def improve_application(
+        self, project_id: str, request: str, *, answer_length: str
+    ) -> ProjectVersion:
+        project = self._authorized_project(project_id)
+        request = self._journey_text(request)
+        if not request or answer_length not in {"short", "standard"}:
+            raise ValidationError("Describe the change and choose a supported answer length.")
+        current = self.repository.get_version(project.current_version_id or "")
+        if current is None or project.prepared_document_count < 1:
+            raise NotReadyError("Add documents and test your application first.")
+        if current.assistant_config.get("answer_length", "standard") == answer_length:
+            raise ValidationError(
+                "Choose a different answer length, or add clearer source documents. "
+                "No other changes are applied automatically."
+            )
+        version = replace(
+            current,
+            id=self.ids.new_id(),
+            number=self.repository.version_count(project.id) + 1,
+            assistant_config={
+                **current.assistant_config,
+                "answer_length": answer_length,
+                "improvement_request": request,
+            },
+            created_at=self.clock.now(),
+        )
+        self.repository.save_version(version)
+        chunks = self.repository.list_chunks(project.id, current.id)
+        for asset_id in current.asset_ids:
+            self.repository.replace_chunks(
+                asset_id,
+                [
+                    replace(
+                        chunk,
+                        id=hashlib.sha256(f"{version.id}:{chunk.id}".encode()).hexdigest(),
+                        project_version_id=version.id,
+                    )
+                    for chunk in chunks
+                    if chunk.asset_id == asset_id
+                ],
+            )
+        project.current_version_id = version.id
+        self._invalidate_draft_test(project)
+        self.repository.save_project(project)
+        self._lifecycle(project.id, "DRAFT_IMPROVED", {"version_id": version.id})
+        return version
+
+    def run_application(self, project_id: str, question: str) -> Answer:
+        project = self._authorized_project(project_id)
+        if project.guided_test_count < 1 or project.has_blocking_preparation_error:
+            raise NotReadyError("Test your current application successfully before running it.")
+        answer = self.ask_question(project_id, question)
+        if not answer.abstained:
+            project.metadata["run_version_id"] = project.current_version_id or ""
+            project.updated_at = self.clock.now()
+            self.repository.save_project(project)
+            self._lifecycle(
+                project.id, "APPLICATION_RUN", {"version_id": project.current_version_id or ""}
+            )
+        return answer
+
+    @transactional
+    def publish_working_application(self, project_id: str) -> Publication:
+        project = self._authorized_project(project_id)
+        if (
+            not project.current_version_id
+            or project.metadata.get("run_version_id") != project.current_version_id
+        ):
+            raise NotReadyError("Run your current application successfully before deploying it.")
+        self.confirm_readiness(project_id)
+        publication = self.deploy(
+            project_id, idempotency_key=f"working-{project.id}-{project.current_version_id}"
+        )
+        project = self._authorized_project(project_id)
+        project.metadata["publication_id"] = publication.id
+        self.repository.save_project(project)
+        return publication
+
+    def _invalidate_draft_test(self, project: Project) -> None:
+        project.guided_test_count = 0
+        project.readiness_confirmed = False
+        project.metadata.pop("run_version_id", None)
+        if project.status in {ProjectStatus.TESTED, ProjectStatus.READY, ProjectStatus.DEPLOYED}:
+            transition_project(project, ProjectStatus.PREPARED)
+        project.updated_at = self.clock.now()
+
     def get_my_project(self, project_id: str) -> Project:
         return self._authorized_project(project_id)
 
     def list_documents(self, project_id: str) -> list[Asset]:
         project = self._authorized_project(project_id)
         return self.repository.list_assets(project.id)
+
+    def latest_publication(self, project_id: str) -> Publication | None:
+        project = self._authorized_project(project_id)
+        # Existing publications predate journey metadata; their durable lifecycle evidence
+        # keeps them discoverable without a data rewrite or changing the snapshot.
+        events = [
+            event
+            for event in self.repository.list_lifecycle_events()
+            if event.project_id == project.id and event.event_type == "PUBLICATION_CREATED"
+        ]
+        candidates: list[tuple[int, Publication]] = []
+        for event in events:
+            publication_id = event.safe_metadata.get("publication_id")
+            if publication_id:
+                publication = self._owned_publication(publication_id)
+                version = self.repository.get_version(publication.project_version_id)
+                if version:
+                    candidates.append((version.number, publication))
+        return max(candidates, key=lambda item: item[0])[1] if candidates else None
 
     def add_and_prepare_document(self, project_id: str, filename: str, content: bytes) -> Asset:
         """Complete the participant's single Add Documents action."""
@@ -296,7 +471,10 @@ class M0Service:
             project.prepared_document_count = sum(
                 item.status == AssetStatus.READY for item in self.repository.list_assets(project.id)
             )
-            project.has_blocking_preparation_error = False
+            project.has_blocking_preparation_error = any(
+                item.status == AssetStatus.FAILED
+                for item in self.repository.list_assets(project.id)
+            )
             if project.status == ProjectStatus.DOCUMENTS_ADDED:
                 transition_project(project, ProjectStatus.PREPARED)
             project.updated_at = self.clock.now()
@@ -336,7 +514,15 @@ class M0Service:
             )
         else:
             try:
-                response = self.generation.generate(GenerationRequest(clean_question, contexts))
+                version = self.repository.get_version(project.current_version_id)
+                short = (
+                    version is not None and version.assistant_config.get("answer_length") == "short"
+                )
+                response = self.generation.generate(
+                    GenerationRequest(
+                        clean_question, contexts, answer_length="short" if short else "standard"
+                    )
+                )
             except ProviderCallError as exc:
                 self._provider_failure(project, correlation_id, "TEST_ASSISTANT", exc)
                 raise
@@ -387,7 +573,10 @@ class M0Service:
         project = self._authorized_project(project_id)
         existing = self.repository.get_publication_for_idempotency(idempotency_key)
         if existing:
-            if existing.owner_user_id != self.auth.current_user().id:
+            if (
+                existing.owner_user_id != self.auth.current_user().id
+                or existing.project_id != project.id
+            ):
                 raise AuthorizationError("You do not have permission to deploy this project.")
             return existing
         if project.status != ProjectStatus.READY or not assess_readiness(project).ready:
@@ -492,7 +681,15 @@ class M0Service:
                 correlation_id,
             )
         try:
-            response = self.generation.generate(GenerationRequest(clean_question, contexts))
+            response = self.generation.generate(
+                GenerationRequest(
+                    clean_question,
+                    contexts,
+                    answer_length="short"
+                    if publication.assistant_config.get("answer_length") == "short"
+                    else "standard",
+                )
+            )
         except ProviderCallError as exc:
             self._save_provider_failure(
                 publication.owner_user_id,
@@ -559,6 +756,7 @@ class M0Service:
         return publication
 
     def _rebuild_project_version(self, project: Project) -> ProjectVersion:
+        current = self.repository.get_version(project.current_version_id or "")
         ready_assets = [
             asset
             for asset in self.repository.list_assets(project.id)
@@ -570,10 +768,12 @@ class M0Service:
             project_id=project.id,
             number=self.repository.version_count(project.id) + 1,
             asset_ids=tuple(asset.id for asset in ready_assets),
-            assistant_config={"template": "ASK_MY_DOCUMENTS", "policy": "GROUNDED_OR_ABSTAIN"},
+            assistant_config=dict(current.assistant_config)
+            if current
+            else {"template": "ASK_MY_DOCUMENTS", "policy": "GROUNDED_OR_ABSTAIN"},
             created_at=self.clock.now(),
         )
-        self.repository.save_version(version)
+        prepared_chunks: dict[str, list[DocumentChunk]] = {}
         for asset in ready_assets:
             raw_chunks = chunk_text(
                 asset.normalized_text or "", max_words=self.settings.chunk_max_words
@@ -619,9 +819,15 @@ class M0Service:
                 )
                 for index, (text, vector) in enumerate(zip(raw_chunks, vectors, strict=True))
             ]
-            self.repository.replace_chunks(asset.id, chunks)
-        project.current_version_id = version.id
-        self.repository.save_project(project)
+            prepared_chunks[asset.id] = chunks
+        # Provider usage is already recorded; switch the draft only after all work succeeds.
+        with self.repository.transaction():
+            self.repository.save_version(version)
+            for asset_id, chunks in prepared_chunks.items():
+                self.repository.replace_chunks(asset_id, chunks)
+            project.current_version_id = version.id
+            self._invalidate_draft_test(project)
+            self.repository.save_project(project)
         return version
 
     def _retrieve(self, project: Project, question: str) -> list[RetrievedContext]:

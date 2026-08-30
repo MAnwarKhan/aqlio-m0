@@ -90,6 +90,52 @@ def test_generation_rejects_fabricated_citation() -> None:
     assert error.value.category == "INVALID_RESPONSE"
 
 
+def test_idea_evaluation_uses_same_adapter_without_weakening_document_grounding():
+    response = SimpleNamespace(
+        output_text=(
+            '{"answer":"Problem: clarify the need.","cited_chunk_ids":[],"abstained":false}'
+        ),
+        usage=SimpleNamespace(input_tokens=10, output_tokens=10),
+    )
+    client = generation_client(response, response)
+    adapter = OpenAIGenerationAdapter(
+        api_key="unused",
+        model="configured-model",
+        timeout_seconds=5,
+        max_retries=0,
+        client=client,
+    )
+    result = adapter.generate(GenerationRequest("Explain policies", (), "idea_evaluation"))
+    assert not result.abstained and not result.citations
+    assert result.usage.input_units == 10
+    assert client.responses.kwargs["max_output_tokens"] == 900
+    assert client.responses.kwargs["store"] is False
+    assert "qualitative" in client.responses.kwargs["instructions"]
+    with pytest.raises(ProviderCallError):
+        adapter.generate(GenerationRequest("Explain policies", ()))
+
+
+def test_short_answer_configuration_keeps_grounding_instructions():
+    response = SimpleNamespace(
+        output_text='{"answer":"Yes.","cited_chunk_ids":["c"],"abstained":false}',
+    )
+    client = generation_client(response)
+    adapter = OpenAIGenerationAdapter(
+        api_key="unused",
+        model="configured-model",
+        timeout_seconds=5,
+        max_retries=0,
+        client=client,
+    )
+    adapter.generate(
+        GenerationRequest(
+            "Question", (RetrievedContext("a", "doc.txt", "c", "Yes."),), answer_length="short"
+        )
+    )
+    assert "only from" in client.responses.kwargs["instructions"]
+    assert "short sentences" in client.responses.kwargs["instructions"]
+
+
 def test_timeout_retries_are_bounded_and_normalized() -> None:
     class APITimeoutError(Exception):
         pass

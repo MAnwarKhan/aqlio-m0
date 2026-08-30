@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     DateTime,
     Float,
@@ -73,6 +74,7 @@ class ProjectRow(Base):
     )
     name: Mapped[str] = mapped_column(String(100))
     description: Mapped[str] = mapped_column(String(500), default="")
+    journey_metadata: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)
     status: Mapped[str] = mapped_column(String(40), index=True)
     valid_document_count: Mapped[int] = mapped_column(Integer, default=0)
     prepared_document_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -97,6 +99,7 @@ class ProjectVersionRow(Base):
     number: Mapped[int] = mapped_column(Integer)
     template: Mapped[str] = mapped_column(String(50))
     policy: Mapped[str] = mapped_column(String(50))
+    assistant_config: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     __table_args__ = (UniqueConstraint("project_id", "number", name="uq_project_version_number"),)
 
@@ -237,6 +240,7 @@ class PublicationRow(Base):
     project_name: Mapped[str] = mapped_column(String(100))
     template: Mapped[str] = mapped_column(String(50))
     policy: Mapped[str] = mapped_column(String(50))
+    assistant_config: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     idempotency_key: Mapped[str] = mapped_column(String(128), unique=True)
 

@@ -2,7 +2,11 @@
 
 ## Project purpose
 
-Build and test **Aqlio M0 — First Useful Deployment**. The supported M0 experience is **Ask My Documents**: a new, non-technical user can create, test, and deploy a useful document-question-answering assistant without seeing or configuring infrastructure.
+Build and test **Aqlio M0 — Turn ideas into working AI solutions**. The platform journey is
+Idea → optional Evaluate → Define → Build → Test → Improve → Run → optional Deploy.
+**Ask My Documents remains the only implemented template**, not the platform boundary.
+The user-approved product revision is recorded in `docs/PRODUCT_JOURNEY_REVISION.md` and
+supersedes narrower journey framing below/in the original documents, not their safety rules.
 
 Optimize for the simplest successful user experience, not the largest feature set.
 
@@ -24,16 +28,11 @@ The original binary file previously named `AGENTS.md` is preserved at `docs/arch
 
 Apply AI for Everyone, Simplicity by Design, Leverage the Best, Cost Optimization First, Progressive Complexity, and Invisible Infrastructure.
 
-Primary journey:
-
-1. Enter the Workspace.
-2. Create a project.
-3. Choose Ask My Documents.
-4. Add supported documents.
-5. Test questions and answers.
-6. Review readiness.
-7. Deploy.
-8. Open and use the deployed assistant.
+Primary journey: describe an idea; optionally evaluate; define the solution; build with the
+first document template; test; improve safely; retest; run inside Aqlio; optionally publish.
+My Projects must support independently saved/resumable projects and creating another project.
+Selection automatically adds/prepares documents. Changed drafts need fresh testing; publication
+snapshots remain immutable. Never claim durable persistence for in-memory smoke environments.
 
 Use participant language such as Workspace, Project, Ask My Documents, Add Documents, Test, Deploy, My Assistant, and Portfolio. Never expose infrastructure/provider terminology in participant UI.
 

@@ -1,13 +1,17 @@
-"""Guided Phase 2 Streamlit journey."""
+"""Guided idea-to-application participant journey."""
 
 from __future__ import annotations
+
+import hashlib
 
 import streamlit as st
 
 from app.application import M0Service, OperationsService, build_runtime_foundation
 from app.application.errors import AqlioError, ShareAccessError
+from app.application.journey import next_step, project_status
+from app.application.m0_service import Answer
 from app.config import Settings, SettingsError
-from app.domain import AssetStatus, ProjectStatus
+from app.domain import AssetStatus, ProjectStatus, PublicationVisibility
 from app.ports import AuthenticationRequired, ProviderCallError
 
 
@@ -52,7 +56,6 @@ def render_home() -> None:
             st.login("google")
         return
     try:
-        user = service.auth.current_user()
         workspace = service.resolve_workspace()
     except (AqlioError, AuthenticationRequired):
         st.error("Aqlio could not start safely. Please contact support.")
@@ -60,38 +63,76 @@ def render_home() -> None:
     if st.query_params.get("operations") == "1":
         _render_operations(service)
         return
-    st.title("Welcome to Aqlio")
+    st.title("Turn your idea into a working AI solution.")
     st.caption(workspace.name)
-    st.write(f"Hello, {user.display_name}. Build a useful assistant from your documents.")
+    st.write("Aqlio guides you from idea to a working AI application—one simple step at a time.")
+    if service.settings.auth_mode == "development":
+        st.warning("Shared demo workspace: use sample ideas and documents only.")
+    if service.settings.persistence_mode == "in_memory":
+        st.warning(
+            "Temporary demo: progress is kept while this demo is running "
+            "and may disappear when it restarts."
+        )
+    elif service.settings.storage_mode == "in_memory":
+        st.warning("Project details are saved, but uploaded files may disappear on restart.")
+    else:
+        st.caption("Your project progress is saved automatically.")
+    if service.settings.ai_mode == "fake":
+        st.caption(
+            "Demo answers and idea guidance are deterministic examples, not a live AI assessment."
+        )
+    if st.button("+ Start New Project"):
+        st.session_state["project_id"] = None
+        st.session_state["new_project"] = True
+        st.rerun()
+    if st.button("My Projects"):
+        st.session_state["project_id"] = None
+        st.session_state["new_project"] = False
+        st.rerun()
+    if st.session_state.get("new_project"):
+        _render_create_project(service)
+        return
+    project_id = st.session_state.get("project_id")
+    if project_id:
+        _render_project(service, project_id)
+        return
+    st.header("My Projects")
     projects = service.list_my_projects()
     if not projects:
         _render_create_project(service)
-        return
-    project_ids = {project.name: project.id for project in projects}
-    selected_id = st.session_state.get("project_id")
-    default_name = next(
-        (name for name, project_id in project_ids.items() if project_id == selected_id),
-        next(iter(project_ids)),
-    )
-    selected_name = st.selectbox(
-        "My Projects", project_ids, index=list(project_ids).index(default_name)
-    )
-    project_id = project_ids[selected_name]
-    st.session_state["project_id"] = project_id
-    _render_project(service, project_id)
+    for project in projects:
+        with st.container(border=True):
+            st.subheader(project.name)
+            st.caption(project_status(project))
+            if st.button("Continue Building", key=f"continue-{project.id}"):
+                st.session_state["project_id"] = project.id
+                st.session_state[f"step-{project.id}"] = next_step(project)
+                st.rerun()
+
+
+def _go(project_id: str, step: str) -> None:
+    st.session_state[f"step-{project_id}"] = step
+    st.rerun()
 
 
 def _render_create_project(service: M0Service) -> None:
-    st.subheader("Create your first project")
+    st.subheader("My Idea")
+    st.write("Start with an idea. You can refine it as you go.")
     with st.form("create-project"):
-        name = st.text_input("Project name", placeholder="Employee Handbook Assistant")
-        description = st.text_area("What should this assistant help with? (optional)")
-        submitted = st.form_submit_button("Create Project", type="primary")
-    if submitted:
+        idea = st.text_area("What would you like to build or solve with AI?", max_chars=2000)
+        evaluate = st.form_submit_button("Evaluate My Idea")
+        submitted = st.form_submit_button("Continue", type="primary")
+    if submitted or evaluate:
         try:
-            project = service.create_project(name, description)
+            project = service.create_idea(idea)
             st.session_state["project_id"] = project.id
-            st.rerun()
+            st.session_state["new_project"] = False
+            if evaluate:
+                try:
+                    service.evaluate_idea(project.id)
+                except (AqlioError, ProviderCallError) as exc:
+                    st.session_state[f"notice-{project.id}"] = str(exc)
+            _go(project.id, "define")
         except AqlioError as exc:
             st.error(str(exc))
 
@@ -99,144 +140,259 @@ def _render_create_project(service: M0Service) -> None:
 def _render_project(service: M0Service, project_id: str) -> None:
     try:
         project = service.get_my_project(project_id)
-    except AqlioError as exc:
+        st.header(project.name)
+        st.caption(project_status(project))
+        notice = st.session_state.pop(f"notice-{project_id}", None)
+        if notice:
+            st.warning(notice)
+        step = st.session_state.get(f"step-{project_id}", next_step(project))
+        if step in {"test", "improve", "run"} and not project.prepared_document_count:
+            step = next_step(project)
+        if step in {"improve", "run"} and not project.guided_test_count:
+            step = "test"
+        if step == "define":
+            _render_definition(service, project_id)
+        elif step == "build":
+            _render_documents(service, project_id)
+        elif step == "improve":
+            _render_improve(service, project_id)
+        else:
+            _render_testing(service, project_id, running=step == "run")
+        publication = service.latest_publication(project_id)
+        if publication:
+            _render_publication(service, publication.id)
+    except (AqlioError, ProviderCallError) as exc:
         st.error(str(exc))
-        return
-    st.header(project.name)
-    st.caption("Ask My Documents")
-    st.write(project.description or "Add documents, test the answers, and deploy when ready.")
-    _render_documents(service, project.id)
-    _render_testing(service, project.id)
-    _render_readiness(service, project.id)
+
+
+_DEFINITION_FIELDS = {
+    "idea": "My Idea",
+    "problem": "What problem are you solving?",
+    "users": "Who is this for?",
+    "outcome": "What would a useful result look like?",
+    "ai_role": "What should the AI help people do?",
+    "information": "What information will it need?",
+}
+
+
+def _render_definition(service: M0Service, project_id: str) -> None:
+    st.subheader("Define My Solution")
+    st.write("Turn your idea into a small first version. Short answers are enough.")
+    project = service.get_my_project(project_id)
+
+    def save_field(field: str, key: str) -> None:
+        try:
+            service.update_definition(project_id, {field: st.session_state[key]})
+        except AqlioError as exc:
+            st.session_state[f"notice-{project_id}"] = str(exc)
+
+    for field, label in _DEFINITION_FIELDS.items():
+        key = f"definition-{project_id}-{field}"
+        st.text_area(
+            label,
+            value=project.metadata.get(field, ""),
+            key=key,
+            max_chars=2000,
+            on_change=save_field,
+            args=(field, key),
+        )
+    if st.button("Evaluate My Idea"):
+        service.evaluate_idea(project_id)
+        st.rerun()
+    evaluation = project.metadata.get("idea_evaluation")
+    if evaluation:
+        st.caption(
+            "Optional guidance only. Improve My Idea by editing the fields above, or continue."
+        )
+        st.text(evaluation)
+    if st.button("Start Building", type="primary"):
+        service.define_solution(project_id)
+        _go(project_id, "build")
 
 
 def _render_documents(service: M0Service, project_id: str) -> None:
-    st.subheader("1. Add Documents")
+    st.subheader("Build")
+    st.write("Build an AI Assistant using your documents—the first supported Aqlio solution.")
+    st.caption(
+        "Add documents your assistant should understand. "
+        "Selection starts preparation automatically."
+    )
     uploads = st.file_uploader(
         "Add PDF, DOCX, or TXT documents",
         type=["pdf", "docx", "txt"],
         accept_multiple_files=True,
+        key=f"uploads-{project_id}",
     )
-    if st.button("Add Documents", disabled=not uploads):
-        failed = False
-        for upload in uploads or []:
+    attempts_key = f"upload-attempts-{project_id}"
+    attempts = st.session_state.setdefault(attempts_key, {})
+    prepared_now = False
+    for upload in uploads or []:
+        content = upload.getvalue()
+        fingerprint = hashlib.sha256(upload.name.encode() + content).hexdigest()
+        if fingerprint not in attempts:
             try:
-                service.add_and_prepare_document(project_id, upload.name, upload.getvalue())
-                st.success(f"Added {upload.name}. Your document is ready.")
+                with st.spinner(f"Preparing {upload.name}…"):
+                    service.add_and_prepare_document(project_id, upload.name, content)
+                attempts[fingerprint] = ""
+                prepared_now = True
             except (AqlioError, ProviderCallError) as exc:
-                failed = True
-                st.error(str(exc))
-        if not failed:
-            st.rerun()
-    documents = service.list_documents(project_id)
-    for document in documents:
-        status = {
-            AssetStatus.UPLOADED: "Ready to prepare",
-            AssetStatus.PREPARING: "Preparing",
-            AssetStatus.READY: "Ready",
-            AssetStatus.FAILED: "Unable to prepare",
-        }[document.status]
-        st.write(f"{document.original_name} — {status}")
-        if document.participant_message and document.status == AssetStatus.FAILED:
-            st.warning(document.participant_message)
-        if document.status != AssetStatus.READY and st.button(
-            "Prepare Document", key=f"prepare-{document.id}"
-        ):
-            try:
-                service.prepare_document(project_id, document.id)
-                st.success("Your document is ready.")
+                attempts[fingerprint] = str(exc)
+        if attempts[fingerprint]:
+            st.error(f"{upload.name}: {attempts[fingerprint]}")
+            if st.button("Try Again", key=f"retry-upload-{project_id}-{fingerprint}"):
+                del attempts[fingerprint]
                 st.rerun()
-            except (AqlioError, ProviderCallError) as exc:
-                st.error(str(exc))
-
-
-def _render_testing(service: M0Service, project_id: str) -> None:
-    st.subheader("2. Test Assistant")
-    documents = service.list_documents(project_id)
-    if not any(document.status == AssetStatus.READY for document in documents):
-        st.info("Prepare at least one document before testing your assistant.")
-        return
-    with st.form("test-assistant"):
-        question = st.text_input(
-            "Ask a test question", placeholder="When can employees use annual leave?"
+    if prepared_now:
+        st.rerun()
+    for document in service.list_documents(project_id):
+        ready = document.status == AssetStatus.READY
+        st.write(
+            f"{'✓' if ready else '○'} {document.original_name} — "
+            f"{'Ready' if ready else 'Needs attention'}"
         )
-        guided = st.checkbox("Count this as my guided test", value=True)
-        ask = st.form_submit_button("Run Test", type="primary")
-    if ask:
-        try:
-            st.session_state["last_answer"] = service.ask_question(
-                project_id, question, guided=guided
+        if not ready:
+            st.warning(
+                document.participant_message or "We couldn't finish preparing this document."
             )
-        except (AqlioError, ProviderCallError) as exc:
-            st.error(str(exc))
-    answer = st.session_state.get("last_answer")
-    if not answer:
-        return
+            if st.button("Try Again", key=f"prepare-{document.id}"):
+                service.prepare_document(project_id, document.id)
+                st.session_state[attempts_key] = {}
+                st.rerun()
+    project = service.get_my_project(project_id)
+    if project.prepared_document_count:
+        st.success("Documents added ✓ · Documents prepared ✓")
+        st.write("Your documents are ready. Next, try a question your users might ask.")
+        if st.button("Test My Application", type="primary"):
+            _go(project_id, "test")
+    else:
+        st.info("Next: select at least one document to build your assistant.")
+    if st.button("Back to My Idea"):
+        _go(project_id, "define")
+
+
+def _render_testing(service: M0Service, project_id: str, *, running: bool = False) -> None:
+    project = service.get_my_project(project_id)
+    st.subheader("Run My Application" if running else "Test My Application")
+    st.write(
+        "Use the application you built inside Aqlio."
+        if running
+        else "Ask a question your users might ask. Check the answer and its sources."
+    )
+    key = f"answer-{project_id}-{project.current_version_id}-{'run' if running else 'test'}"
+    with st.form(f"question-{project_id}-{'run' if running else 'test'}"):
+        question = st.text_input("Ask a question")
+        ask = st.form_submit_button("Ask" if running else "Test Your Assistant", type="primary")
+    if ask:
+        st.session_state.pop(key, None)
+        st.session_state[key] = (
+            service.run_application(project_id, question)
+            if running
+            else service.ask_question(project_id, question, guided=True)
+        )
+    answer = st.session_state.get(key)
+    if answer:
+        _render_answer(answer)
+    project = service.get_my_project(project_id)
+    if project.guided_test_count:
+        st.success("Your current version has passed a test. Keep trying different questions.")
+        if st.button("Improve My Application"):
+            _go(project_id, "improve")
+        if not running and st.button("Run My Application"):
+            _go(project_id, "run")
+        if running:
+            _render_readiness(service, project_id)
+    if st.button("Add Documents"):
+        _go(project_id, "build")
+    if running and st.button("Test Again"):
+        _go(project_id, "test")
+
+
+def _render_answer(answer: Answer) -> None:
     if answer.abstained:
         st.warning(
             "I couldn't find enough information in your documents to answer that confidently."
         )
     else:
-        st.write(answer.text)
+        st.text(answer.text)
         st.markdown("**Sources**")
         for citation in answer.citations:
-            st.write(f"- {citation.document_name} — source passage")
+            st.text(f"{citation.document_name} — source passage")
+
+
+def _render_improve(service: M0Service, project_id: str) -> None:
+    st.subheader("Improve My Application")
+    st.write(
+        "For this first version, you can change answer length or add clearer source documents."
+    )
+    st.caption(
+        "Only the selected answer length is applied. Summaries, comparisons, "
+        "and other new behaviors are not built automatically."
+    )
+    with st.form(f"improve-{project_id}"):
+        request = st.text_area("What would you like to improve?", max_chars=2000)
+        length = st.selectbox(
+            "Answer length",
+            ["short", "standard"],
+            format_func=lambda value: "Shorter answers" if value == "short" else "Standard answers",
+        )
+        apply = st.form_submit_button("Apply Answer Length")
+    if apply:
+        service.improve_application(project_id, request, answer_length=length)
+        _go(project_id, "test")
+    if st.button("Add Better Documents"):
+        _go(project_id, "build")
+    if st.button("Back to Testing"):
+        _go(project_id, "test")
 
 
 def _render_readiness(service: M0Service, project_id: str) -> None:
     project = service.get_my_project(project_id)
-    st.subheader("3. Ready to Deploy")
-    checks = (
-        (project.valid_document_count > 0, "Documents added"),
-        (project.prepared_document_count > 0, "Documents prepared"),
-        (project.guided_test_count > 0, "Assistant tested"),
-        (not project.has_blocking_preparation_error, "No blocking document issues"),
-    )
-    for complete, label in checks:
-        st.write(f"{'✓' if complete else '○'} {label}")
-    confirmed = st.checkbox("I am ready to deploy this assistant")
-    if st.button("Confirm Readiness", disabled=not confirmed):
-        try:
-            service.confirm_readiness(project_id)
-            st.success("Your assistant is ready to deploy.")
+    if project.metadata.get("run_version_id") != project.current_version_id:
+        st.info("Next: get a useful answer here to confirm your application works.")
+        return
+    if project.has_blocking_preparation_error:
+        st.warning("Resolve document issues before deploying.")
+        return
+    st.success("Your application is working in Aqlio.")
+    if project.status != ProjectStatus.DEPLOYED:
+        st.write(
+            "Deploy a private, stable version inside Aqlio when you are ready. "
+            "This does not create an external commercial application."
+        )
+        if st.button("Deploy in Aqlio"):
+            service.publish_working_application(project_id)
             st.rerun()
-        except AqlioError as exc:
-            st.error(str(exc))
-    project = service.get_my_project(project_id)
-    if st.button("Deploy", type="primary", disabled=project.status != ProjectStatus.READY):
-        try:
-            publication = service.deploy(project_id, idempotency_key=f"ui-{project_id}")
-            st.session_state["publication_id"] = publication.id
-            st.success("Project successfully deployed.")
-            st.rerun()
-        except AqlioError as exc:
-            st.error(str(exc))
-    publication_id = st.session_state.get("publication_id")
-    if publication_id:
-        _render_publication(service, publication_id)
 
 
 def _render_publication(service: M0Service, publication_id: str) -> None:
-    st.subheader("4. My Assistant")
-    if st.button("Open Assistant"):
-        try:
-            assistant = service.open_private(publication_id)
-            st.success(f"{assistant.project_name} is running.")
-        except AqlioError as exc:
-            st.error(str(exc))
-    if st.button("Share"):
-        try:
+    service.open_private(publication_id)
+    st.subheader("Deployed Version")
+    st.caption("A stable Aqlio-hosted version. Draft improvements do not change it.")
+    link = service.repository.get_share_link(publication_id)
+    shared = link is not None and link.visibility == PublicationVisibility.LINK_ONLY
+    st.write("Visibility: Anyone with the link" if shared else "Visibility: Only me")
+    token_key = f"share-token-{publication_id}"
+    if not shared:
+        confirmed = st.checkbox(
+            "Allow anyone with the link to ask questions using this version's documents",
+            key=f"share-confirm-{publication_id}",
+        )
+        if st.button("Create Share Link", disabled=not confirmed, key=f"share-{publication_id}"):
             receipt = service.enable_link_sharing(publication_id)
-            st.session_state["share_token"] = receipt.token
-        except AqlioError as exc:
-            st.error(str(exc))
-    token = st.session_state.get("share_token")
-    if token:
-        st.info(f"Share path: ?share={token}")
-        if st.button("Stop Sharing"):
+            st.session_state[token_key] = receipt.token
+            st.rerun()
+    if shared:
+        token = st.session_state.get(token_key)
+        if token:
+            st.code(f"?share={token}")
+        else:
+            st.caption(
+                "The existing link remains active. Stop sharing before creating a replacement."
+            )
+        if st.button("Stop Sharing", key=f"revoke-{publication_id}"):
             service.revoke_sharing(publication_id)
-            st.session_state.pop("share_token", None)
-            st.success("Sharing has stopped.")
+            st.session_state.pop(token_key, None)
+            st.rerun()
 
 
 def _render_shared(service: M0Service, token: str) -> None:

@@ -80,6 +80,21 @@ class FakeGenerationAdapter:
 
     def generate(self, request: GenerationRequest) -> GenerationResponse:
         self.call_count += 1
+        if request.purpose == "idea_evaluation":
+            return GenerationResponse(
+                "Needs More Validation — a starting point, not a prediction of success.\n\n"
+                f"Your idea: {request.question}\n\n"
+                "Problem: Describe one frustrating task this would solve.\n\n"
+                "Users: Choose a specific group and ask how they handle it today.\n\n"
+                "Impact: Identify a useful outcome, such as time saved or clearer answers.\n\n"
+                "AI Fit: AI may help explain information; "
+                "verify important answers with sources.\n\n"
+                "Feasibility: Start with questions answered by a small set of documents. "
+                "This first version cannot act on other systems.\n\n"
+                "Differentiation: Test what your chosen users find missing in current options.\n\n"
+                "Next: Narrow the first version and try it with a potential user.",
+                (),
+            )
         if not request.context:
             return GenerationResponse(
                 answer="I couldn't establish that from the documents provided.",
@@ -87,7 +102,7 @@ class FakeGenerationAdapter:
                 abstained=True,
             )
         source = request.context[0]
-        excerpt = " ".join(source.text.split())[:240]
+        excerpt = " ".join(source.text.split())[: 120 if request.answer_length == "short" else 240]
         return GenerationResponse(
             answer=f"Based on {source.document_name}: {excerpt}",
             citations=(Citation(source.document_name, source.chunk_id),),
