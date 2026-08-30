@@ -203,6 +203,12 @@ class M0Service:
         project = self._authorized_project(project_id)
         return self.repository.list_assets(project.id)
 
+    def add_and_prepare_document(self, project_id: str, filename: str, content: bytes) -> Asset:
+        """Complete the participant's single Add Documents action."""
+
+        asset = self.upload_document(project_id, filename, content)
+        return self.prepare_document(project_id, asset.id)
+
     @transactional
     def upload_document(self, project_id: str, filename: str, content: bytes) -> Asset:
         project = self._authorized_project(project_id)

@@ -118,13 +118,16 @@ def _render_documents(service: M0Service, project_id: str) -> None:
         accept_multiple_files=True,
     )
     if st.button("Add Documents", disabled=not uploads):
+        failed = False
         for upload in uploads or []:
             try:
-                service.upload_document(project_id, upload.name, upload.getvalue())
-                st.success(f"Added {upload.name}.")
+                service.add_and_prepare_document(project_id, upload.name, upload.getvalue())
+                st.success(f"Added {upload.name}. Your document is ready.")
             except (AqlioError, ProviderCallError) as exc:
+                failed = True
                 st.error(str(exc))
-        st.rerun()
+        if not failed:
+            st.rerun()
     documents = service.list_documents(project_id)
     for document in documents:
         status = {

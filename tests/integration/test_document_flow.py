@@ -45,6 +45,26 @@ def test_docx_real_text_extraction() -> None:
     assert "travel allowance" in (prepared.normalized_text or "")
 
 
+def test_participant_add_action_uploads_and_prepares_docx() -> None:
+    document = Document()
+    document.add_paragraph("Annual leave is available after ninety days.")
+    buffer = io.BytesIO()
+    document.save(buffer)
+    service = build_service()
+    project = service.create_project("One-step document")
+
+    prepared = service.add_and_prepare_document(
+        project.id, "employee_handbook.docx", buffer.getvalue()
+    )
+    refreshed = service.get_my_project(project.id)
+
+    assert prepared.status is AssetStatus.READY
+    assert refreshed.valid_document_count == 1
+    assert refreshed.prepared_document_count == 1
+    assert refreshed.current_version_id is not None
+    assert service.ask_question(project.id, "When is annual leave available?").citations
+
+
 @pytest.mark.parametrize(
     ("filename", "content", "message"),
     [
