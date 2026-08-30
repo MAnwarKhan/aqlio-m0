@@ -75,3 +75,11 @@
 **Known issues:** Live OpenAI and full Railway staging checks require external credentials and were not run. Pricing defaults to zero until operators configure reviewed rates. Process-local rate limiting remains a single-instance pilot constraint.
 **Deferred items:** Controlled staging activation, infrastructure restore drill, live usage reconciliation review, and any shared/distributed rate limiter needed for scaling.
 **Next phase:** Execute a staged, budget-capped release without changing participant behavior.
+
+## Phase 5 — Controlled staging validation
+
+**Status:** In progress; external staging prerequisites unavailable.
+**Completed locally:** Phase 4 committed as `70b79a2`; pilot mode confirmed fail-closed without credentials; two clean migration runs reached `20260829_0002` with matching 21-table schemas; credential-free regression, security, persistence, and health gates rerun.
+**Not run:** Streamlit Community Cloud deployment, Railway PostgreSQL/private storage, Google OIDC, two-identity staging authorization, backup/restore, rollback, live logging/accessibility review, and capped OpenAI validation.
+**External prerequisites:** Isolated staging services and platform-managed secrets, exact OIDC redirect registration, two approved staging identities, and an explicit live-test cost cap.
+**Release decision:** Not ready for a small participant pilot until the live matrix in `PHASE5_STAGING_VALIDATION.md` is completed without a release blocker.

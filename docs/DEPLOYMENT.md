@@ -43,6 +43,38 @@ Do not run migrations concurrently from every web process. Back up the database 
 
 Configure pilot secrets through the hosting control plane. Never commit `.env`, `.streamlit/secrets.toml`, database URLs, OIDC secrets, storage credentials, provider keys, signed URLs, or user content.
 
+## Minimum external prerequisites
+
+### Railway PostgreSQL
+
+- An isolated staging PostgreSQL service and operator access capable of setting its connection URL in Streamlit secrets.
+- Network access from the migration runner and Streamlit Community Cloud.
+- Permission to run `alembic upgrade head`, inspect the migration revision, create a backup/snapshot, and restore into a separate target.
+
+### Private object storage
+
+- An isolated S3-compatible endpoint, private bucket, region if required, and scoped access-key credentials configured in Streamlit secrets.
+- Permission for only the required put/get/delete operations and access to confirm public browsing is disabled.
+- A separate or safely namespaced restore target for the backup/restore drill.
+
+### Google OIDC
+
+- A Google OAuth/OIDC client configured for the exact Streamlit staging redirect URI.
+- Client ID and secret configured through Streamlit native authentication secrets, plus a strong cookie secret.
+- Two approved staging Google identities, with one optional admin email, for first-login, repeat-login, logout, inactive-user, and cross-user authorization checks.
+
+### Streamlit Community Cloud
+
+- Access to deploy the GitHub repository to an isolated staging application without triggering an unintended production release.
+- Repository/branch selection, staging URL, secret-management access, application logs, restart/redeploy control, and rollback to a known commit.
+- Confirmation of the staging source branch before pushing the four local accepted checkpoints currently ahead of `origin/main`.
+
+### OpenAI
+
+- A staging-scoped API key stored only in Streamlit/platform secrets and explicit generation/embedding model identifiers.
+- Reviewed per-million pricing metadata, `LIVE_AI_TEST_MAX_CALLS=4`, and a small explicit `LIVE_AI_TEST_MAX_ESTIMATED_COST`.
+- Permission to inspect provider-side usage for reconciliation. Do not enable managed mode until all fake-AI infrastructure/security gates pass.
+
 ## Pilot release gate
 
 Before staging, verify clean installation, fail-closed startup configuration, migrations, restart persistence, private defaults, clean-browser link access, revocation, the documented deletion procedure, backup/restore, rollback compatibility, redacted logs, allowances, rate limits, admin authorization, and the deterministic end-to-end journey.
