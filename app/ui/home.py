@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import json
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 from app.application import M0Service, OperationsService, build_runtime_foundation
 from app.application.errors import AqlioError, ShareAccessError
@@ -272,7 +275,9 @@ def _render_documents(service: M0Service, project_id: str) -> None:
 
 def _render_testing(service: M0Service, project_id: str, *, running: bool = False) -> None:
     project = service.get_my_project(project_id)
-    st.subheader("Run My Application" if running else "Test My Application")
+    st.subheader("Working Version")
+    st.caption("Improvements change this version only. Publish an update when ready.")
+    st.write("Run Application" if running else "Test My Application")
     st.write(
         "Use the application you built inside Aqlio."
         if running
@@ -293,18 +298,19 @@ def _render_testing(service: M0Service, project_id: str, *, running: bool = Fals
     if answer:
         _render_answer(answer)
     project = service.get_my_project(project_id)
+    if answer and not answer.abstained:
+        st.success("Your application is working with this question")
     if project.guided_test_count:
-        st.success("Your current version has passed a test. Keep trying different questions.")
-        if st.button("Improve My Application"):
+        if st.button("Test Again"):
+            st.session_state.pop(key, None)
+            _go(project_id, "test")
+        if st.button("Improve"):
             _go(project_id, "improve")
-        if not running and st.button("Run My Application"):
+        if not running and st.button("Run Application"):
             _go(project_id, "run")
-        if running:
-            _render_readiness(service, project_id)
-    if st.button("Add Documents"):
+        _render_readiness(service, project_id)
+    elif st.button("Improve"):
         _go(project_id, "build")
-    if running and st.button("Test Again"):
-        _go(project_id, "test")
 
 
 def _render_answer(answer: Answer) -> None:
@@ -320,7 +326,11 @@ def _render_answer(answer: Answer) -> None:
 
 
 def _render_improve(service: M0Service, project_id: str) -> None:
-    st.subheader("Improve My Application")
+    st.subheader("Improve Working Version")
+    st.info(
+        "Changes affect the Working Version. Your Published Version stays unchanged "
+        "until you publish a new version."
+    )
     st.write(
         "For this first version, you can change answer length or add clearer source documents."
     )
@@ -341,33 +351,44 @@ def _render_improve(service: M0Service, project_id: str) -> None:
         _go(project_id, "test")
     if st.button("Add Better Documents"):
         _go(project_id, "build")
+    pdfs = [
+        document
+        for document in service.list_documents(project_id)
+        if document.media_type == "application/pdf"
+    ]
+    if pdfs:
+        st.caption(
+            "Refresh existing PDFs to apply text-reading corrections to the Working Version."
+        )
+        if st.button("Refresh PDF Documents"):
+            for document in pdfs:
+                service.prepare_document(project_id, document.id, refresh=True)
+            _go(project_id, "test")
     if st.button("Back to Testing"):
         _go(project_id, "test")
 
 
 def _render_readiness(service: M0Service, project_id: str) -> None:
     project = service.get_my_project(project_id)
-    if project.metadata.get("run_version_id") != project.current_version_id:
-        st.info("Next: get a useful answer here to confirm your application works.")
-        return
     if project.has_blocking_preparation_error:
-        st.warning("Resolve document issues before deploying.")
+        st.warning("Resolve document issues in Improve before publishing.")
         return
-    st.success("Your application is working in Aqlio.")
     if project.status != ProjectStatus.DEPLOYED:
-        st.write(
-            "Deploy a private, stable version inside Aqlio when you are ready. "
-            "This does not create an external commercial application."
-        )
-        if st.button("Deploy in Aqlio"):
+        st.caption("Publish a private snapshot of this Working Version inside Aqlio.")
+        if st.button("Publish Application"):
             service.publish_working_application(project_id)
             st.rerun()
+    else:
+        st.caption("This Working Version is already published.")
 
 
 def _render_publication(service: M0Service, publication_id: str) -> None:
     service.open_private(publication_id)
-    st.subheader("Deployed Version")
-    st.caption("A stable Aqlio-hosted version. Draft improvements do not change it.")
+    st.subheader("Published Version")
+    st.caption(
+        "A stable snapshot inside Aqlio. Improve the Working Version, then publish an update. "
+        "Existing shared links keep their original Published Version."
+    )
     link = service.repository.get_share_link(publication_id)
     shared = link is not None and link.visibility == PublicationVisibility.LINK_ONLY
     st.write("Visibility: Anyone with the link" if shared else "Visibility: Only me")
@@ -384,7 +405,7 @@ def _render_publication(service: M0Service, publication_id: str) -> None:
     if shared:
         token = st.session_state.get(token_key)
         if token:
-            st.code(f"?share={token}")
+            _render_share_controls(token)
         else:
             st.caption(
                 "The existing link remains active. Stop sharing before creating a replacement."
@@ -393,6 +414,46 @@ def _render_publication(service: M0Service, publication_id: str) -> None:
             service.revoke_sharing(publication_id)
             st.session_state.pop(token_key, None)
             st.rerun()
+
+
+def _render_share_controls(token: str) -> None:
+    # Bearer credentials belong in navigation URLs, not visible diagnostic text.
+    current = urlsplit(st.context.url or "")
+    if current.scheme not in {"http", "https"} or not current.netloc:
+        st.info("Open this page through its application address to use sharing controls.")
+        return
+    url = urlunsplit(
+        (current.scheme, current.netloc, current.path, urlencode({"share": token}), "")
+    )
+    st.link_button("Open Shared Application", url)
+    encoded = json.dumps(url).replace("<", "\\u003c")
+    components.html(
+        """
+        <button id="copy" style="padding:8px 14px;background:white;border:1px solid #ccc;
+        border-radius:8px;cursor:pointer">Copy Link</button>
+        <span id="status" role="status" style="font:14px sans-serif"></span>
+        <script>
+        const link = """
+        + encoded
+        + """;
+        document.getElementById("copy").onclick = async () => {
+          let copied = false;
+          try { await navigator.clipboard.writeText(link); copied = true; }
+          catch (_) {
+            const input = document.createElement("textarea");
+            input.value = link;
+            input.style.position = "fixed"; input.style.opacity = "0";
+            document.body.appendChild(input); input.select();
+            try { copied = document.execCommand("copy"); } catch (_) {}
+            input.remove();
+          }
+          document.getElementById("status").textContent = copied ? "Link copied" :
+            "Copy unavailable here. Open Shared Application and copy its address.";
+        };
+        </script>
+        """,
+        height=48,
+    )
 
 
 def _render_shared(service: M0Service, token: str) -> None:

@@ -61,6 +61,7 @@ def extract_text(filename: str, content: bytes) -> str:
         elif extension == "pdf":
             reader = PdfReader(io.BytesIO(content))
             text = "\n".join(page.extract_text() or "" for page in reader.pages)
+            text = normalize_pdf_text(text)
         else:
             raise PreparationError(
                 "We couldn't prepare this document. Add a PDF, DOCX, or TXT file."
@@ -75,6 +76,35 @@ def extract_text(filename: str, content: bytes) -> str:
     if not normalized:
         raise PreparationError("We couldn't find usable text in this document.")
     return normalized
+
+
+def normalize_pdf_text(text: str) -> str:
+    """Repair reported whole-word extraction artifacts, never arbitrary F/l characters.
+
+    Without the source PDF these are conservative lexical repairs, not font-map recovery.
+    Keep this PDF-specific so literal TXT/DOCX identifiers are not rewritten.
+    """
+    ligatures = dict(zip("ﬀﬁﬂﬃﬄﬅﬆ", ("ff", "fi", "fl", "ffi", "ffl", "st", "st"), strict=True))
+    text = text.translate(
+        {ord(character): replacement for character, replacement in ligatures.items()}
+    )
+    repairs = {
+        "documentaFon": "documentation",
+        "invenFons": "inventions",
+        "informaFon": "information",
+        "Plalorm": "Platform",
+    }
+    repairs.update(
+        {
+            word[0].upper() + word[1:]: fixed[0].upper() + fixed[1:]
+            for word, fixed in list(repairs.items())
+        }
+    )
+    return re.sub(
+        r"\b(?:" + "|".join(map(re.escape, repairs)) + r")\b",
+        lambda match: repairs[match.group()],
+        text,
+    )
 
 
 def normalize_text(text: str) -> str:

@@ -82,9 +82,9 @@ def test_improve_retest_run_and_publish_preserves_previous_publication():
     question = "When is annual leave available?"
     with pytest.raises(NotReadyError):
         service.run_application(project_id, question)
-    service.ask_question(project_id, question, guided=True)
     with pytest.raises(NotReadyError):
         service.publish_working_application(project_id)
+    service.ask_question(project_id, question, guided=True)
     service.run_application(project_id, question)
     assert project_status(service.get_my_project(project_id)) == "Working"
     publication = service.publish_working_application(project_id)

@@ -7,7 +7,7 @@ service is introduced. Initial staging remains `AQLIO_AI_MODE=fake`.
 
 ## Participant flow
 
-Idea → optional Evaluate → Define → Build → Test → Improve → Test Again → Run → optional Deploy.
+Idea → optional Evaluate → Define → Build → Test → Improve → Test Again → Run → optional Publish.
 
 - My Projects lists independent projects by ID, including duplicate names. Continue Building
   resumes from persisted readiness; navigation state is not authoritative.
@@ -17,15 +17,15 @@ Idea → optional Evaluate → Define → Build → Test → Improve → Test Ag
 - Definition fields save on edit/blur. Continue first creates the idea; evaluation is optional.
 - File selection automatically validates, adds, and prepares. Failed attempts remain visible
   with Try Again; ordinary reruns do not automatically retry failed work or duplicate versions.
-- Test shows grounded answers/sources or abstention. Deployment controls are absent until the
-  current version has passed testing and a successful Run in Aqlio question.
+- Test shows grounded answers/sources or abstention. Publishing is offered after a successful current-version test. Run is a peer action,
+  not an extra publishing gate; all other readiness checks remain enforced.
 - Improve accepts a description plus an explicit short/standard answer-length choice.
   **Only that choice changes behavior.** It is not a natural-language autonomous builder;
   summaries, cross-document comparisons, and new engines are not implemented. Better documents
   are the other supported improvement. Grounding/citations remain mandatory.
 - Improvements create a new version and invalidate prior test/readiness/run evidence.
   Adding documents preserves the chosen answer length and requires retesting the new version.
-- Deploy in Aqlio combines internal readiness confirmation and immutable private publication.
+- Publish Application combines internal readiness confirmation and immutable private publication.
   It is not commercial infrastructure deployment. Link sharing requires explicit consent.
 - Publications remain discoverable after navigation/reconstruction, including legacy records;
   old links continue to use their original immutable configuration and content.
@@ -73,9 +73,31 @@ discards its in-memory projects, as the participant warning explains.
 3. Select a supported DOCX. Without a second Add action, see Ready and Test My Application.
 4. Ask an answerable question and inspect its source; ask an unsupported question and see abstention.
 5. Choose shorter answers in Improve, retest, and Run My Application with an answerable question.
-6. Optionally deploy privately, enable sharing explicitly, check a clean-session link, and revoke.
+6. Optionally publish privately, enable sharing explicitly, check a clean-session link, and revoke.
 7. Improve the draft again; verify the previously shared publication remains unchanged.
 8. Return to My Projects, start another idea, and resume both independently.
 
 No Railway, object storage, OpenAI credentials, or Google OIDC is provisioned. No persistence or
 GO pilot decision is claimed. Do not merge/overwrite main as part of this revision.
+
+## Focused post-test clarification
+
+The participant sees Working Version and Published Version. After a successful question:
+“Your application is working with this question”, followed by Test Again, Improve,
+Run Application, and Publish Application. Document additions/refresh live under Improve.
+Internal deployment identifiers/states remain unchanged for compatibility; participant wording
+uses Publish. Improvements require retesting and do not mutate existing publication snapshots.
+Publishing an updated snapshot leaves prior links pinned to their original version.
+
+Sharing shows Open Shared Application, Copy Link, and Stop Sharing instead of raw token text.
+Only token hashes are persisted. If the owner loses the transient original link, they must
+stop sharing and create a replacement; the system cannot recover a token from its hash.
+Clipboard denial produces an honest recovery message, not a false success.
+
+PDF extraction now expands typographic ligatures and applies whole-word corrections for the
+reported documentaFon/invenFons/informaFon/Plalorm artifacts. This is deliberately PDF-only
+and not a global F/l substitution or general spellchecker. The original affected PDF was not
+provided: font-map corruption is plausible but unconfirmed. Regression tests stub extracted
+PDF text, then verify normalized retrieval/answers and immutable publications. Refresh PDF
+Documents under Improve reparses stored PDFs into a new Working Version; old Published
+Versions deliberately retain their original text. No live files are rewritten automatically.

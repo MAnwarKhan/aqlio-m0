@@ -330,11 +330,8 @@ class M0Service:
     @transactional
     def publish_working_application(self, project_id: str) -> Publication:
         project = self._authorized_project(project_id)
-        if (
-            not project.current_version_id
-            or project.metadata.get("run_version_id") != project.current_version_id
-        ):
-            raise NotReadyError("Run your current application successfully before deploying it.")
+        if not project.current_version_id or project.guided_test_count < 1:
+            raise NotReadyError("Test your Working Version successfully before publishing it.")
         self.confirm_readiness(project_id)
         publication = self.deploy(
             project_id, idempotency_key=f"working-{project.id}-{project.current_version_id}"
@@ -440,11 +437,11 @@ class M0Service:
             )
             raise
 
-    def prepare_document(self, project_id: str, asset_id: str) -> Asset:
+    def prepare_document(self, project_id: str, asset_id: str, *, refresh: bool = False) -> Asset:
         project = self._authorized_project(project_id)
         self._limit(project.owner_user_id, "prepare", self.settings.preparation_rate_limit)
         asset = self._authorized_asset(project, asset_id)
-        if asset.status == AssetStatus.READY:
+        if asset.status == AssetStatus.READY and not refresh:
             return asset
         asset.status = AssetStatus.PREPARING
         asset.participant_message = "Preparing"
@@ -557,7 +554,7 @@ class M0Service:
         result = assess_readiness(project)
         if not result.ready:
             project.readiness_confirmed = False
-            raise NotReadyError("Complete the readiness steps before deploying your assistant.")
+            raise NotReadyError("Complete the readiness steps before publishing your application.")
         if project.status == ProjectStatus.TESTED:
             transition_project(project, ProjectStatus.READY)
         self.repository.save_project(project)
@@ -577,15 +574,15 @@ class M0Service:
                 existing.owner_user_id != self.auth.current_user().id
                 or existing.project_id != project.id
             ):
-                raise AuthorizationError("You do not have permission to deploy this project.")
+                raise AuthorizationError("You do not have permission to publish this project.")
             return existing
         if project.status != ProjectStatus.READY or not assess_readiness(project).ready:
-            raise NotReadyError("Complete the readiness steps before deploying your assistant.")
+            raise NotReadyError("Complete the readiness steps before publishing your application.")
         if project.current_version_id is None:
-            raise NotReadyError("Prepare your documents before deploying your assistant.")
+            raise NotReadyError("Prepare your documents before publishing your application.")
         version = self.repository.get_version(project.current_version_id)
         if version is None:
-            raise NotReadyError("Prepare your documents again before deploying.")
+            raise NotReadyError("Prepare your documents again before publishing.")
         chunks = self.repository.list_chunks(project.id, version.id)
         publication = Publication(
             id=self.ids.new_id(),

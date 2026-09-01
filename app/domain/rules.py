@@ -48,7 +48,7 @@ def assess_readiness(project: Project) -> ReadinessResult:
     if project.has_blocking_preparation_error:
         missing.append("Resolve the document preparation issue.")
     if not project.readiness_confirmed:
-        missing.append("Confirm that the assistant is ready to deploy.")
+        missing.append("Confirm that the application is ready to publish.")
     return ReadinessResult(ready=not missing, missing=tuple(missing))
 
 
@@ -58,5 +58,5 @@ def transition_project(project: Project, target: ProjectStatus) -> None:
     if target not in _ALLOWED_TRANSITIONS[project.status]:
         raise InvalidTransition(f"Cannot move project from {project.status} to {target}.")
     if target == ProjectStatus.READY and not assess_readiness(project).ready:
-        raise InvalidTransition("Project is not ready to deploy.")
+        raise InvalidTransition("Project is not ready to publish.")
     project.status = target

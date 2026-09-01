@@ -21,7 +21,7 @@ def test_idea_definition_autosave_and_multiple_project_navigation(monkeypatch):
     button(app, "Continue").click().run()
     assert not app.exception
     project_id = service.list_my_projects()[0].id
-    assert not any(item.label == "Deploy in Aqlio" for item in app.button)
+    assert not any(item.label == "Publish Application" for item in app.button)
     app.text_area[1].input("Finding policy answers takes too long").run()
     assert (
         service.get_my_project(project_id).metadata["problem"]
@@ -65,11 +65,18 @@ def test_docx_selection_prepares_once_and_unlocks_test_without_add_button(monkey
     button(app, "Test Your Assistant").click().run()
     assert not app.exception
     assert service.get_my_project(project.id).guided_test_count == 1
-    button(app, "Run My Application").click().run()
-    assert not any(item.label == "Deploy in Aqlio" for item in app.button)
+    assert any(
+        item.value == "Your application is working with this question" for item in app.success
+    )
+    assert {"Test Again", "Improve", "Run Application", "Publish Application"} <= {
+        item.label for item in app.button
+    }
+    assert not any(item.label == "Add Documents" for item in app.button)
+    button(app, "Run Application").click().run()
+    assert any(item.label == "Publish Application" for item in app.button)
     app.text_input[0].input("When is annual leave available?")
     button(app, "Ask").click().run()
-    button(app, "Deploy in Aqlio").click().run()
+    button(app, "Publish Application").click().run()
     assert service.get_my_project(project.id).metadata["publication_id"]
     assert not app.exception
 

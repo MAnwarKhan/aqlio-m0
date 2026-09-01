@@ -3,7 +3,7 @@
 ## Project purpose
 
 Build and test **Aqlio M0 — Turn ideas into working AI solutions**. The platform journey is
-Idea → optional Evaluate → Define → Build → Test → Improve → Run → optional Deploy.
+Idea → optional Evaluate → Define → Build → Test → Improve → Run → optional Publish.
 **Ask My Documents remains the only implemented template**, not the platform boundary.
 The user-approved product revision is recorded in `docs/PRODUCT_JOURNEY_REVISION.md` and
 supersedes narrower journey framing below/in the original documents, not their safety rules.
@@ -34,9 +34,11 @@ My Projects must support independently saved/resumable projects and creating ano
 Selection automatically adds/prepares documents. Changed drafts need fresh testing; publication
 snapshots remain immutable. Never claim durable persistence for in-memory smoke environments.
 
-Use participant language such as Workspace, Project, Ask My Documents, Add Documents, Test, Deploy, My Assistant, and Portfolio. Never expose infrastructure/provider terminology in participant UI.
+Use participant language such as Workspace, Project, Working Version, Published Version,
+Test, Improve, Run Application, and Publish Application. Document management belongs under
+Improve after testing. Never expose infrastructure/provider terminology in participant UI.
 
-Participant **Deploy** means publishing an immutable approved assistant version inside Aqlio. It does not provision infrastructure.
+Participant **Publish** means publishing an immutable approved assistant version inside Aqlio. It does not provision infrastructure.
 
 ## Architecture boundaries
 

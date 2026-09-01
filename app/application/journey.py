@@ -7,9 +7,9 @@ def project_status(project: Project) -> str:
     if project.status == ProjectStatus.ARCHIVED:
         return "Archived"
     if project.status == ProjectStatus.DEPLOYED:
-        return "Deployed"
+        return "Published"
     if project.status == ProjectStatus.READY:
-        return "Ready to Deploy"
+        return "Ready to Publish"
     if (
         project.current_version_id
         and project.metadata.get("run_version_id") == project.current_version_id
