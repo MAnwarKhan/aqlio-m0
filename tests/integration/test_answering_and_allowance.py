@@ -18,6 +18,8 @@ def test_grounded_answer_citation_abstention_and_usage() -> None:
     assert unsupported.citations == ()
     assert len(service.repository.usage_events) == 2
     assert all(event.estimated_cost == 0 for event in service.repository.usage_events)
+    assert service.get_my_project(project_id).guided_test_count == 0
+    service.confirm_test_success(project_id, grounded.correlation_id)
     assert service.get_my_project(project_id).guided_test_count == 1
 
 

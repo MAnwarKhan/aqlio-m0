@@ -8,12 +8,14 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from functools import wraps
 
+from app.application.advisor_workflow import AdvisorWorkflowService
 from app.application.documents import (
     chunk_text,
     extract_text,
     remove_untrusted_instruction_chunks,
     validate_document,
 )
+from app.application.eligibility_advisor import AdvisorInput, AdvisorResult
 from app.application.errors import (
     AllowanceExceeded,
     AuthorizationError,
@@ -23,13 +25,21 @@ from app.application.errors import (
     ShareAccessError,
     ValidationError,
 )
+from app.application.export_builder import build_export
+from app.application.lifecycle_coordinator import LifecycleCoordinator
+from app.application.specification_lifecycle import default_specification_registry
 from app.config import Settings
 from app.domain import (
+    ApplicationSpecification,
+    ApplicationType,
+    ApprovedVersionSnapshot,
     Asset,
     AssetStatus,
     AuditEvent,
     DocumentChunk,
-    GuidedTest,
+    EvaluationReport,
+    ExportPackage,
+    ExportPackageStatus,
     LifecycleEvent,
     Project,
     ProjectStatus,
@@ -81,7 +91,15 @@ _STOPWORDS = {
     "to",
     "what",
     "when",
+    "all",
+    "complete",
+    "every",
+    "list",
+    "please",
+    "with",
 }
+
+_COMPLETE_REQUEST_TERMS = {"all", "complete", "every", "list"}
 
 
 def transactional[**P, R](method: Callable[P, R]) -> Callable[P, R]:
@@ -105,9 +123,33 @@ class Answer:
 
 
 @dataclass(frozen=True, slots=True)
+class ImprovementProposal:
+    request: str
+    response_style: str
+    summary: str
+    supported: bool = True
+    participant_message: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class UIImprovementProposal:
+    request: str
+    ui_config: dict[str, str]
+    summary: str
+    supported: bool = True
+    participant_message: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class ShareReceipt:
     publication_id: str
     token: str
+
+
+@dataclass(frozen=True, slots=True)
+class ExportDownload:
+    package: ExportPackage
+    content: bytes
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,6 +186,26 @@ class M0Service:
         self.repository = repository
         self.storage = storage
         self.rate_limiter = rate_limiter
+        self.specifications = default_specification_registry()
+        self.lifecycle = LifecycleCoordinator(
+            auth=auth,
+            clock=clock,
+            ids=ids,
+            repository=repository,
+            registry=self.specifications,
+            authorized_project=self._authorized_project,
+            lifecycle_event=self._lifecycle,
+        )
+        self.advisor = AdvisorWorkflowService(
+            clock=clock,
+            ids=ids,
+            repository=repository,
+            lifecycle=self.lifecycle,
+            authorized_project=self._authorized_project,
+            create_project=self.create_project,
+            lifecycle_event=self._lifecycle,
+            clean_text=self._journey_text,
+        )
 
     @transactional
     def resolve_workspace(self) -> Workspace:
@@ -167,7 +229,12 @@ class M0Service:
         return workspace
 
     @transactional
-    def create_project(self, name: str, description: str = "") -> Project:
+    def create_project(
+        self,
+        name: str,
+        description: str = "",
+        application_type: ApplicationType = ApplicationType.ASK_MY_DOCUMENTS,
+    ) -> Project:
         user = self.auth.current_user()
         workspace = self.resolve_workspace()
         clean_name = " ".join(name.split())
@@ -184,12 +251,22 @@ class M0Service:
             description=" ".join(description.split())[:500],
             created_at=now,
             updated_at=now,
-            metadata={"template": "ASK_MY_DOCUMENTS"},
+            metadata={"template": application_type.value},
         )
         self.repository.save_project(project)
-        self._lifecycle(project.id, "PROJECT_CREATED", {"template": "ASK_MY_DOCUMENTS"})
+        self._lifecycle(project.id, "PROJECT_CREATED", {"template": application_type.value})
         self._audit(workspace.id, project.id, "PROJECT_CREATED", "SUCCEEDED")
         return project
+
+    @transactional
+    def create_advisor_project(
+        self, *, name: str, problem: str, users: str, outcome: str
+    ) -> Project:
+        return self.advisor.create(name=name, problem=problem, users=users, outcome=outcome)
+
+    @transactional
+    def build_advisor_working_version(self, project_id: str) -> ProjectVersion:
+        return self.advisor.build(project_id)
 
     def list_my_projects(self) -> list[Project]:
         user = self.auth.current_user()
@@ -219,6 +296,13 @@ class M0Service:
         if not fields.keys() <= allowed:
             raise ValidationError("Use the solution definition fields provided.")
         cleaned = {key: self._journey_text(value) for key, value in fields.items()}
+        if project.current_version_id and any(
+            value != project.metadata.get(key, "") for key, value in cleaned.items()
+        ):
+            raise ValidationError(
+                "This intent is already part of the Working Version. Use Improve to create a new "
+                "versioned change."
+            )
         if "idea" in cleaned and not cleaned["idea"]:
             raise ValidationError("Describe your idea to continue.")
         if cleaned.get("idea", project.metadata.get("idea")) != project.metadata.get("idea"):
@@ -266,29 +350,56 @@ class M0Service:
         return response.answer
 
     @transactional
-    def improve_application(
-        self, project_id: str, request: str, *, answer_length: str
-    ) -> ProjectVersion:
+    def propose_improvement(
+        self, project_id: str, request: str, *, response_style: str
+    ) -> ImprovementProposal:
         project = self._authorized_project(project_id)
         request = self._journey_text(request)
-        if not request or answer_length not in {"short", "standard"}:
-            raise ValidationError("Describe the change and choose a supported answer length.")
+        if not request or response_style not in {"concise", "balanced", "detailed"}:
+            raise ValidationError("Describe the change and choose a supported response style.")
         current = self.repository.get_version(project.current_version_id or "")
         if current is None or project.prepared_document_count < 1:
             raise NotReadyError("Add documents and test your application first.")
-        if current.assistant_config.get("answer_length", "standard") == answer_length:
-            raise ValidationError(
-                "Choose a different answer length, or add clearer source documents. "
-                "No other changes are applied automatically."
+        supported = self._is_supported_response_improvement(request)
+        if not supported:
+            return ImprovementProposal(
+                request,
+                response_style,
+                "This change is not supported in the current Ask My Documents version.",
+                supported=False,
+                participant_message=(
+                    "Try an answer-focused change such as clearer wording, more detail, "
+                    "a complete list, a summary, a comparison, or better source citations."
+                ),
             )
+        return ImprovementProposal(
+            request,
+            response_style,
+            f"Use a {response_style} response style and apply this guidance: {request}",
+        )
+
+    @transactional
+    def apply_improvement(
+        self, project_id: str, request: str, *, response_style: str
+    ) -> ProjectVersion:
+        proposal = self.propose_improvement(project_id, request, response_style=response_style)
+        if not proposal.supported:
+            raise ValidationError(
+                proposal.participant_message or "That improvement is not supported yet."
+            )
+        project = self._authorized_project(project_id)
+        current = self.repository.get_version(project.current_version_id or "")
+        if current is None:
+            raise NotReadyError("Add documents and test your application first.")
         version = replace(
             current,
             id=self.ids.new_id(),
             number=self.repository.version_count(project.id) + 1,
             assistant_config={
                 **current.assistant_config,
-                "answer_length": answer_length,
-                "improvement_request": request,
+                "response_style": proposal.response_style,
+                "response_guidance": proposal.request,
+                "improvement_request": proposal.request,
             },
             created_at=self.clock.now(),
         )
@@ -311,6 +422,170 @@ class M0Service:
         self._invalidate_draft_test(project)
         self.repository.save_project(project)
         self._lifecycle(project.id, "DRAFT_IMPROVED", {"version_id": version.id})
+        return version
+
+    def improve_application(
+        self, project_id: str, request: str, *, answer_length: str
+    ) -> ProjectVersion:
+        """Compatibility wrapper for callers created before adaptive response styles."""
+        style = {"short": "concise", "standard": "balanced"}.get(answer_length)
+        if style is None:
+            raise ValidationError("Choose a supported response style.")
+        return self.apply_improvement(project_id, request, response_style=style)
+
+    def get_application_specification(self, project_id: str) -> ApplicationSpecification:
+        return self.lifecycle.specification(project_id)
+
+    @transactional
+    def evaluate_working_version(self, project_id: str) -> EvaluationReport:
+        return self.lifecycle.evaluate(project_id)
+
+    @transactional
+    def test_advisor(self, project_id: str, value: AdvisorInput) -> AdvisorResult:
+        return self.advisor.test(project_id, value)
+
+    def confirm_advisor_test_success(self, project_id: str) -> Project:
+        return self.advisor.confirm_test(project_id)
+
+    @transactional
+    def apply_advisor_improvement(
+        self,
+        project_id: str,
+        request: str,
+        *,
+        title: str | None = None,
+        recommendation_style: str = "direct",
+    ) -> ProjectVersion:
+        return self.advisor.improve(
+            project_id,
+            request,
+            title=title,
+            recommendation_style=recommendation_style,
+        )
+
+    @transactional
+    def improve_failed_evaluation(self, project_id: str) -> Project:
+        return self.lifecycle.improve_failed_evaluation(project_id)
+
+    @transactional
+    def propose_ui_improvement(
+        self,
+        project_id: str,
+        request: str,
+        *,
+        title: str,
+        instructions: str,
+        question_position: str,
+        response_layout: str,
+        citation_presentation: str,
+        display_density: str,
+    ) -> UIImprovementProposal:
+        project = self._authorized_project(project_id)
+        request = self._journey_text(request)
+        title = self._journey_text(title)
+        instructions = self._journey_text(instructions)
+        if not request or not title or not instructions:
+            raise ValidationError("Describe the change and provide a title and instructions.")
+        if project.prepared_document_count < 1 or not project.current_version_id:
+            raise NotReadyError("Build your Working Version before improving its experience.")
+        choices = {
+            "question_position": ({"top", "bottom"}, question_position),
+            "response_layout": ({"prose", "list", "table"}, response_layout),
+            "citation_presentation": ({"compact", "expanded"}, citation_presentation),
+            "display_density": ({"concise", "balanced", "detailed"}, display_density),
+        }
+        if any(value not in allowed for allowed, value in choices.values()):
+            raise ValidationError("Choose only the available look and experience options.")
+        ui_config = {
+            "title": title,
+            "instructions": instructions,
+            "question_position": question_position,
+            "response_layout": response_layout,
+            "citation_presentation": citation_presentation,
+            "display_density": display_density,
+        }
+        if not self._is_supported_ui_improvement(request):
+            return UIImprovementProposal(
+                request,
+                ui_config,
+                "This look and experience change is not supported yet.",
+                supported=False,
+                participant_message=(
+                    "You can change the title, instructions, question-box position, answer layout, "
+                    "citation presentation, and display detail using the options shown."
+                ),
+            )
+        return UIImprovementProposal(
+            request,
+            ui_config,
+            (
+                f"Show “{title}” with the selected instructions, place the question box at the "
+                f"{question_position}, use a {response_layout} answer layout, show citations in "
+                f"{citation_presentation} form, and use a {display_density} display."
+            ),
+        )
+
+    @transactional
+    def apply_ui_improvement(
+        self,
+        project_id: str,
+        request: str,
+        *,
+        title: str,
+        instructions: str,
+        question_position: str,
+        response_layout: str,
+        citation_presentation: str,
+        display_density: str,
+    ) -> ProjectVersion:
+        proposal = self.propose_ui_improvement(
+            project_id,
+            request,
+            title=title,
+            instructions=instructions,
+            question_position=question_position,
+            response_layout=response_layout,
+            citation_presentation=citation_presentation,
+            display_density=display_density,
+        )
+        if not proposal.supported:
+            raise ValidationError(
+                proposal.participant_message or "That look and experience change is not supported."
+            )
+        project = self._authorized_project(project_id)
+        current = self.repository.get_version(project.current_version_id or "")
+        if current is None:
+            raise NotReadyError("Build your Working Version first.")
+        version = replace(
+            current,
+            id=self.ids.new_id(),
+            number=self.repository.version_count(project.id) + 1,
+            assistant_config={
+                **current.assistant_config,
+                **{f"ui_{key}": value for key, value in proposal.ui_config.items()},
+                "ui_improvement_request": proposal.request,
+            },
+            created_at=self.clock.now(),
+        )
+        self.repository.save_version(version)
+        chunks = self.repository.list_chunks(project.id, current.id)
+        for asset_id in current.asset_ids:
+            self.repository.replace_chunks(
+                asset_id,
+                [
+                    replace(
+                        chunk,
+                        id=hashlib.sha256(f"{version.id}:{chunk.id}".encode()).hexdigest(),
+                        project_version_id=version.id,
+                    )
+                    for chunk in chunks
+                    if chunk.asset_id == asset_id
+                ],
+            )
+        project.current_version_id = version.id
+        self._invalidate_draft_test(project)
+        self.repository.save_project(project)
+        self._lifecycle(project.id, "WORKING_VERSION_UI_IMPROVED", {"version_id": version.id})
         return version
 
     def run_application(self, project_id: str, question: str) -> Answer:
@@ -341,13 +616,108 @@ class M0Service:
         self.repository.save_project(project)
         return publication
 
+    @transactional
+    def approve_working_version(self, project_id: str) -> ApprovedVersionSnapshot:
+        return self.lifecycle.approve(project_id)
+
+    def get_approved_version(self, snapshot_id: str) -> ApprovedVersionSnapshot:
+        snapshot = self.repository.get_approved_version(snapshot_id)
+        if snapshot is None:
+            raise AuthorizationError("That Approved Version is not available.")
+        project = self._authorized_project(snapshot.specification.project_id)
+        if (
+            snapshot.owner_user_id != project.owner_user_id
+            or snapshot.workspace_id != project.workspace_id
+        ):
+            raise AuthorizationError("That Approved Version is not available.")
+        return snapshot
+
+    def latest_approved_version(self, project_id: str) -> ApprovedVersionSnapshot | None:
+        project = self._authorized_project(project_id)
+        snapshots = self.repository.list_approved_versions(project.id)
+        if not snapshots:
+            return None
+
+        def version_number(item: ApprovedVersionSnapshot) -> int:
+            version = self.repository.get_version(item.specification.project_version_id)
+            return version.number if version else -1
+
+        return max(snapshots, key=version_number)
+
+    @transactional
+    def generate_application_export(self, project_id: str) -> ExportPackage:
+        project = self._authorized_project(project_id)
+        approved = self.latest_approved_version(project.id)
+        if (
+            approved is None
+            or approved.specification.project_version_id != project.current_version_id
+        ):
+            raise NotReadyError(
+                "Approve the current tested Working Version before getting its application code."
+            )
+        export_version = len(self.repository.list_export_packages(project.id)) + 1
+        built = build_export(approved, export_version, self.clock.now())
+        safe_name = re.sub(r"[^a-z0-9]+", "-", approved.specification.name.lower()).strip("-")
+        filename = f"{safe_name or 'ask-my-documents'}-v{export_version}.zip"
+        storage_key = self.storage.put(
+            workspace_id=project.workspace_id,
+            project_id=project.id,
+            content=built.content,
+        )
+        package = ExportPackage(
+            id=self.ids.new_id(),
+            approved_snapshot_id=approved.id,
+            owner_user_id=project.owner_user_id,
+            workspace_id=project.workspace_id,
+            project_id=project.id,
+            project_version_id=approved.specification.project_version_id,
+            export_version=export_version,
+            status=ExportPackageStatus.READY,
+            storage_key=storage_key,
+            filename=filename,
+            sha256=built.sha256,
+            created_at=self.clock.now(),
+        )
+        self.repository.save_export_package(package)
+        self._lifecycle(
+            project.id,
+            "APPLICATION_EXPORT_READY",
+            {"version_id": package.project_version_id},
+        )
+        return package
+
+    def download_application_export(self, package_id: str) -> ExportDownload:
+        package = self.repository.get_export_package(package_id)
+        if package is None:
+            raise AuthorizationError("That application package is not available.")
+        project = self._authorized_project(package.project_id)
+        if (
+            package.owner_user_id != project.owner_user_id
+            or package.workspace_id != project.workspace_id
+        ):
+            raise AuthorizationError("That application package is not available.")
+        content = self.storage.get(
+            workspace_id=package.workspace_id,
+            project_id=package.project_id,
+            storage_key=package.storage_key,
+        )
+        if hashlib.sha256(content).hexdigest() != package.sha256:
+            raise ValidationError(
+                "The application package could not be verified. Generate it again."
+            )
+        return ExportDownload(package, content)
+
     def _invalidate_draft_test(self, project: Project) -> None:
-        project.guided_test_count = 0
-        project.readiness_confirmed = False
-        project.metadata.pop("run_version_id", None)
-        if project.status in {ProjectStatus.TESTED, ProjectStatus.READY, ProjectStatus.DEPLOYED}:
-            transition_project(project, ProjectStatus.PREPARED)
-        project.updated_at = self.clock.now()
+        self.lifecycle.invalidate(project)
+
+    @staticmethod
+    def _application_type(project: Project) -> ApplicationType:
+        return LifecycleCoordinator.application_type(project)
+
+    @staticmethod
+    def _require_document_project(project: Project) -> None:
+        if LifecycleCoordinator.application_type(project) != ApplicationType.ASK_MY_DOCUMENTS:
+            raise ValidationError("This action belongs to Ask My Documents.")
 
     def get_my_project(self, project_id: str) -> Project:
         return self._authorized_project(project_id)
@@ -384,6 +754,7 @@ class M0Service:
     @transactional
     def upload_document(self, project_id: str, filename: str, content: bytes) -> Asset:
         project = self._authorized_project(project_id)
+        self._require_document_project(project)
         self._limit(project.owner_user_id, "upload", self.settings.upload_rate_limit)
         assets = self.repository.list_assets(project.id)
         checksum = hashlib.sha256(content).hexdigest()
@@ -439,6 +810,7 @@ class M0Service:
 
     def prepare_document(self, project_id: str, asset_id: str, *, refresh: bool = False) -> Asset:
         project = self._authorized_project(project_id)
+        self._require_document_project(project)
         self._limit(project.owner_user_id, "prepare", self.settings.preparation_rate_limit)
         asset = self._authorized_asset(project, asset_id)
         if asset.status == AssetStatus.READY and not refresh:
@@ -489,6 +861,7 @@ class M0Service:
 
     def ask_question(self, project_id: str, question: str, *, guided: bool = False) -> Answer:
         project = self._authorized_project(project_id)
+        self._require_document_project(project)
         user = self.auth.current_user()
         self._limit(user.id, "test_assistant", self.settings.ai_rate_limit)
         clean_question = " ".join(question.split())
@@ -512,12 +885,15 @@ class M0Service:
         else:
             try:
                 version = self.repository.get_version(project.current_version_id)
-                short = (
-                    version is not None and version.assistant_config.get("answer_length") == "short"
-                )
+                config = dict(version.assistant_config) if version is not None else {}
+                legacy_style = "concise" if config.get("answer_length") == "short" else "balanced"
                 response = self.generation.generate(
                     GenerationRequest(
-                        clean_question, contexts, answer_length="short" if short else "standard"
+                        clean_question,
+                        contexts,
+                        response_style=config.get("response_style", legacy_style),  # type: ignore[arg-type]
+                        response_guidance=config.get("response_guidance", ""),
+                        complete_answer_required=self._is_complete_request(clean_question),
                     )
                 )
             except ProviderCallError as exc:
@@ -529,23 +905,41 @@ class M0Service:
             "ABSTAINED" if not contexts else "SUCCEEDED",
             usage=response.usage,
         )
-        if guided and not response.abstained:
-            test = GuidedTest(
-                id=self.ids.new_id(),
-                project_id=project.id,
-                project_version_id=project.current_version_id,
-                user_id=user.id,
-                question_summary=hashlib.sha256(clean_question.encode()).hexdigest()[:12],
-                cited_asset_ids=tuple(context.document_id for context in contexts),
-                completed_at=self.clock.now(),
+        if guided:
+            self._clear_pending_test(project)
+            project.metadata["pending_test_correlation_id"] = correlation_id
+            project.metadata["pending_test_version_id"] = project.current_version_id or ""
+            project.metadata["pending_test_question_summary"] = hashlib.sha256(
+                clean_question.encode()
+            ).hexdigest()[:12]
+            project.metadata["pending_test_asset_ids"] = ",".join(
+                sorted({context.document_id for context in contexts})
             )
-            self.repository.save_guided_test(test)
-            project.guided_test_count += 1
-            if project.status == ProjectStatus.PREPARED:
-                transition_project(project, ProjectStatus.TESTED)
+            project.metadata["pending_test_abstained"] = str(response.abstained).lower()
             self.repository.save_project(project)
-            self._lifecycle(project.id, "TEST_COMPLETED", {"test_id": test.id})
         return Answer(response.answer, response.citations, response.abstained, correlation_id)
+
+    @transactional
+    def confirm_test_success(self, project_id: str, correlation_id: str) -> Project:
+        return self.lifecycle.confirm_participant_validation(project_id, correlation_id)
+
+    @transactional
+    def record_test_feedback(self, project_id: str, correlation_id: str, feedback: str) -> Project:
+        project = self._authorized_project(project_id)
+        if project.metadata.get("pending_test_correlation_id") != correlation_id:
+            raise ValidationError("Test the current Working Version before adding feedback.")
+        feedback = self._journey_text(feedback)
+        if not feedback:
+            raise ValidationError("Describe what needs improvement.")
+        project.metadata["improvement_feedback"] = feedback
+        self._invalidate_draft_test(project)
+        self.repository.save_project(project)
+        self._lifecycle(project.id, "TEST_NEEDS_IMPROVEMENT", {})
+        return project
+
+    @staticmethod
+    def _clear_pending_test(project: Project) -> None:
+        LifecycleCoordinator.clear_pending_test(project)
 
     @transactional
     def confirm_readiness(self, project_id: str) -> Project:
@@ -678,13 +1072,15 @@ class M0Service:
                 correlation_id,
             )
         try:
+            config = dict(publication.assistant_config)
+            legacy_style = "concise" if config.get("answer_length") == "short" else "balanced"
             response = self.generation.generate(
                 GenerationRequest(
                     clean_question,
                     contexts,
-                    answer_length="short"
-                    if publication.assistant_config.get("answer_length") == "short"
-                    else "standard",
+                    response_style=config.get("response_style", legacy_style),  # type: ignore[arg-type]
+                    response_guidance=config.get("response_guidance", ""),
+                    complete_answer_required=self._is_complete_request(clean_question),
                 )
             )
         except ProviderCallError as exc:
@@ -767,7 +1163,14 @@ class M0Service:
             asset_ids=tuple(asset.id for asset in ready_assets),
             assistant_config=dict(current.assistant_config)
             if current
-            else {"template": "ASK_MY_DOCUMENTS", "policy": "GROUNDED_OR_ABSTAIN"},
+            else {
+                "template": "ASK_MY_DOCUMENTS",
+                "behavioral_schema": "ask-my-documents.behavior.v1",
+                "policy": "GROUNDED_OR_ABSTAIN",
+                "spec_problem": project.metadata.get("problem", project.description),
+                "spec_users": project.metadata.get("users", ""),
+                "spec_outcome": project.metadata.get("outcome", ""),
+            },
             created_at=self.clock.now(),
         )
         prepared_chunks: dict[str, list[DocumentChunk]] = {}
@@ -830,22 +1233,35 @@ class M0Service:
     def _retrieve(self, project: Project, question: str) -> list[RetrievedContext]:
         if project.current_version_id is None:
             return []
-        query_terms = {
-            term
-            for term in re.findall(r"[a-z0-9]+", question.lower())
-            if len(term) > 2 and term not in _STOPWORDS
-        }
+        query_terms = self._question_terms(question)
+        if not query_terms:
+            return []
         candidates = self.repository.list_chunks(project.id, project.current_version_id)
         safe_texts = set(remove_untrusted_instruction_chunks([chunk.text for chunk in candidates]))
         scored: list[tuple[int, DocumentChunk]] = []
         for chunk in candidates:
             if chunk.text not in safe_texts:
                 continue
-            chunk_terms = set(re.findall(r"[a-z0-9]+", chunk.text.lower()))
+            chunk_terms = self._normalized_terms(chunk.text)
             score = len(query_terms & chunk_terms)
-            if score:
+            required = 1 if len(query_terms) == 1 else max(2, (len(query_terms) + 1) // 2)
+            if score >= required:
                 scored.append((score, chunk))
         scored.sort(key=lambda item: (-item[0], item[1].source_name, item[1].position))
+        if self._is_complete_request(question) and scored:
+            matched_assets = {chunk.asset_id for _score, chunk in scored}
+            complete_chunks = sorted(
+                (
+                    chunk
+                    for chunk in candidates
+                    if chunk.asset_id in matched_assets and chunk.text in safe_texts
+                ),
+                key=lambda chunk: (chunk.source_name, chunk.position),
+            )[:12]
+            return [
+                RetrievedContext(chunk.asset_id, chunk.source_name, chunk.id, chunk.text)
+                for chunk in complete_chunks
+            ]
         return [
             RetrievedContext(chunk.asset_id, chunk.source_name, chunk.id, chunk.text)
             for _score, chunk in scored[:3]
@@ -854,11 +1270,9 @@ class M0Service:
     def _retrieve_publication(
         self, publication: Publication, question: str
     ) -> list[RetrievedContext]:
-        query_terms = {
-            term
-            for term in re.findall(r"[a-z0-9]+", question.lower())
-            if len(term) > 2 and term not in _STOPWORDS
-        }
+        query_terms = self._question_terms(question)
+        if not query_terms:
+            return []
         safe_texts = set(
             remove_untrusted_instruction_chunks([chunk.text for chunk in publication.chunks])
         )
@@ -866,10 +1280,20 @@ class M0Service:
         for chunk in publication.chunks:
             if chunk.text not in safe_texts:
                 continue
-            score = len(query_terms & set(re.findall(r"[a-z0-9]+", chunk.text.lower())))
-            if score:
+            score = len(query_terms & self._normalized_terms(chunk.text))
+            required = 1 if len(query_terms) == 1 else max(2, (len(query_terms) + 1) // 2)
+            if score >= required:
                 scored.append((score, chunk))
         scored.sort(key=lambda item: (-item[0], item[1].source_name, item[1].position))
+        if self._is_complete_request(question) and scored:
+            matched_assets = {chunk.asset_id for _score, chunk in scored}
+            selected = [
+                chunk
+                for chunk in publication.chunks
+                if chunk.asset_id in matched_assets and chunk.text in safe_texts
+            ][:12]
+        else:
+            selected = [chunk for _score, chunk in scored[:3]]
         return [
             RetrievedContext(
                 chunk.asset_id,
@@ -877,8 +1301,110 @@ class M0Service:
                 f"published:{chunk.asset_id}:{chunk.position}",
                 chunk.text,
             )
-            for _score, chunk in scored[:3]
+            for chunk in selected
         ]
+
+    @staticmethod
+    def _normalized_terms(text: str) -> set[str]:
+        terms: set[str] = set()
+        for raw in re.findall(r"[a-z0-9]+", text.lower()):
+            if len(raw) <= 2:
+                continue
+            term = raw[:-3] + "y" if raw.endswith("ies") and len(raw) > 4 else raw
+            if term.endswith("s") and not term.endswith("ss") and len(term) > 4:
+                term = term[:-1]
+            if term.endswith("ed") and len(term) > 5:
+                term = term[:-2]
+                if term.endswith(("c", "g", "r", "s", "v", "z")):
+                    term += "e"
+            terms.add(term)
+        return terms
+
+    @classmethod
+    def _question_terms(cls, question: str) -> set[str]:
+        return {term for term in cls._normalized_terms(question) if term not in _STOPWORDS}
+
+    @classmethod
+    def _is_complete_request(cls, question: str) -> bool:
+        return bool(cls._normalized_terms(question) & _COMPLETE_REQUEST_TERMS)
+
+    @classmethod
+    def _is_supported_response_improvement(cls, request: str) -> bool:
+        request_terms = cls._normalized_terms(request)
+        unsupported_terms = {
+            "accounting",
+            "action",
+            "audio",
+            "email",
+            "integration",
+            "send",
+            "system",
+            "tool",
+            "voice",
+            "workflow",
+        }
+        if request_terms & unsupported_terms:
+            return False
+        supported_terms = {
+            "answer",
+            "brief",
+            "citation",
+            "cite",
+            "clear",
+            "clearly",
+            "compare",
+            "comparison",
+            "complete",
+            "concise",
+            "detail",
+            "detailed",
+            "explain",
+            "explanatory",
+            "list",
+            "response",
+            "short",
+            "source",
+            "summary",
+            "summarize",
+            "wording",
+        }
+        return bool(request_terms & supported_terms)
+
+    @classmethod
+    def _is_supported_ui_improvement(cls, request: str) -> bool:
+        request_terms = cls._normalized_terms(request)
+        unsupported_terms = {
+            "animation",
+            "audio",
+            "code",
+            "css",
+            "html",
+            "javascript",
+            "plugin",
+            "theme",
+            "video",
+            "voice",
+        }
+        supported_terms = {
+            "answer",
+            "box",
+            "citation",
+            "concise",
+            "detail",
+            "detailed",
+            "display",
+            "easier",
+            "instruction",
+            "layout",
+            "list",
+            "question",
+            "response",
+            "simple",
+            "source",
+            "table",
+            "title",
+        }
+        return not bool(request_terms & unsupported_terms) and bool(request_terms & supported_terms)
 
     def _publication_view(
         self, publication: Publication, visibility: PublicationVisibility

@@ -6,18 +6,25 @@ import json
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import asdict
 from datetime import UTC, datetime
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.domain import (
+    ApplicationSpecification,
+    ApplicationType,
+    ApprovedVersionSnapshot,
     Asset,
     AssetStatus,
     AuditEvent,
     DocumentChunk,
+    ExportPackage,
+    ExportPackageStatus,
     GuidedTest,
     LifecycleEvent,
+    ParticipantValidationEvidence,
     Project,
     ProjectStatus,
     ProjectVersion,
@@ -27,13 +34,16 @@ from app.domain import (
     ShareLink,
     UsageEvent,
     User,
+    VersionApprovalState,
     Workspace,
     WorkspaceMember,
 )
 from app.infrastructure.db_models import (
+    ApprovedVersionRow,
     AssetRow,
     AuditEventRow,
     DocumentChunkRow,
+    ExportPackageRow,
     GuidedTestRow,
     LifecycleEventRow,
     ProjectRow,
@@ -348,6 +358,113 @@ class SQLAlchemyM0Repository:
             )
             self._finish(session)
 
+    def list_guided_tests(self, project_id: str) -> list[GuidedTest]:
+        with self._session() as session:
+            rows = session.scalars(
+                select(GuidedTestRow).where(GuidedTestRow.project_id == project_id)
+            ).all()
+            return [
+                GuidedTest(
+                    row.id,
+                    row.project_id,
+                    row.project_version_id,
+                    row.user_id,
+                    row.question_summary,
+                    tuple(item for item in row.cited_asset_ids.split(",") if item),
+                    row.completed_at
+                    if row.completed_at.tzinfo is not None
+                    else row.completed_at.replace(tzinfo=UTC),
+                )
+                for row in rows
+            ]
+
+    def save_approved_version(self, snapshot: ApprovedVersionSnapshot) -> None:
+        from app.application.specification_lifecycle import report_to_json, specification_to_dict
+
+        specification = snapshot.specification
+        with self._session() as session:
+            session.add(
+                ApprovedVersionRow(
+                    id=snapshot.id,
+                    owner_user_id=snapshot.owner_user_id,
+                    workspace_id=snapshot.workspace_id,
+                    project_id=specification.project_id,
+                    project_version_id=specification.project_version_id,
+                    application_type=specification.application_type.value,
+                    name=specification.name,
+                    description=specification.description,
+                    behavior_config=dict(specification.behavior_config),
+                    ui_config=dict(specification.ui_config),
+                    document_asset_ids=list(specification.document_asset_ids),
+                    behavioral_specification=(
+                        specification_to_dict(specification.behavioral_specification)
+                        if specification.behavioral_specification
+                        else None
+                    ),
+                    evaluation_report=(
+                        json.loads(report_to_json(specification.evaluation_report))
+                        if specification.evaluation_report
+                        else None
+                    ),
+                    participant_validation=(
+                        {
+                            **asdict(snapshot.participant_validation),
+                            "validated_at": (
+                                snapshot.participant_validation.validated_at.isoformat()
+                            ),
+                        }
+                        if snapshot.participant_validation
+                        else None
+                    ),
+                    approved_at=snapshot.approved_at,
+                )
+            )
+            self._finish(session)
+
+    def get_approved_version(self, snapshot_id: str) -> ApprovedVersionSnapshot | None:
+        with self._session() as session:
+            row = session.get(ApprovedVersionRow, snapshot_id)
+            return self._approved_version(row) if row else None
+
+    def list_approved_versions(self, project_id: str) -> list[ApprovedVersionSnapshot]:
+        with self._session() as session:
+            rows = session.scalars(
+                select(ApprovedVersionRow).where(ApprovedVersionRow.project_id == project_id)
+            ).all()
+            return [self._approved_version(row) for row in rows]
+
+    def save_export_package(self, package: ExportPackage) -> None:
+        with self._session() as session:
+            session.add(
+                ExportPackageRow(
+                    id=package.id,
+                    approved_snapshot_id=package.approved_snapshot_id,
+                    owner_user_id=package.owner_user_id,
+                    workspace_id=package.workspace_id,
+                    project_id=package.project_id,
+                    project_version_id=package.project_version_id,
+                    export_version=package.export_version,
+                    status=package.status.value,
+                    storage_key=package.storage_key,
+                    filename=package.filename,
+                    sha256=package.sha256,
+                    created_at=package.created_at,
+                )
+            )
+            self._finish(session)
+
+    def get_export_package(self, package_id: str) -> ExportPackage | None:
+        with self._session() as session:
+            row = session.get(ExportPackageRow, package_id)
+            return self._export_package(row) if row else None
+
+    def list_export_packages(self, project_id: str) -> list[ExportPackage]:
+        with self._session() as session:
+            rows = session.scalars(
+                select(ExportPackageRow).where(ExportPackageRow.project_id == project_id)
+            ).all()
+            return [self._export_package(row) for row in rows]
+
     def save_usage(self, event: UsageEvent) -> None:
         with self._session() as session:
             session.add(
@@ -577,6 +694,83 @@ class SQLAlchemyM0Repository:
             row.is_admin,
             row.identity_provider,
             row.identity_subject,
+        )
+
+    @staticmethod
+    def _approved_version(row: ApprovedVersionRow) -> ApprovedVersionSnapshot:
+        from app.application.specification_lifecycle import (
+            report_from_json,
+            specification_from_dict,
+        )
+
+        return ApprovedVersionSnapshot(
+            id=row.id,
+            owner_user_id=row.owner_user_id,
+            workspace_id=row.workspace_id,
+            specification=ApplicationSpecification(
+                project_id=row.project_id,
+                project_version_id=row.project_version_id,
+                application_type=ApplicationType(row.application_type),
+                name=row.name,
+                description=row.description,
+                behavior_config=row.behavior_config,
+                ui_config=row.ui_config,
+                document_asset_ids=tuple(row.document_asset_ids),
+                approval_state=VersionApprovalState.APPROVED,
+                behavioral_specification=(
+                    specification_from_dict(
+                        row.behavioral_specification, ApplicationType(row.application_type)
+                    )
+                    if row.behavioral_specification
+                    else None
+                ),
+                evaluation_report=(
+                    report_from_json(json.dumps(row.evaluation_report))
+                    if row.evaluation_report
+                    else None
+                ),
+            ),
+            approved_at=(
+                row.approved_at
+                if row.approved_at.tzinfo is not None
+                else row.approved_at.replace(tzinfo=UTC)
+            ),
+            participant_validation=(
+                ParticipantValidationEvidence(
+                    id=str(row.participant_validation["id"]),
+                    project_version_id=str(row.participant_validation["project_version_id"]),
+                    participant_user_id=str(row.participant_validation["participant_user_id"]),
+                    input_summary=str(row.participant_validation["input_summary"]),
+                    validated_at=datetime.fromisoformat(
+                        str(row.participant_validation["validated_at"])
+                    ),
+                    outcome=str(row.participant_validation["outcome"]),
+                )
+                if row.participant_validation
+                else None
+            ),
+        )
+
+    @staticmethod
+    def _export_package(row: ExportPackageRow) -> ExportPackage:
+        created_at = (
+            row.created_at
+            if row.created_at.tzinfo is not None
+            else row.created_at.replace(tzinfo=UTC)
+        )
+        return ExportPackage(
+            id=row.id,
+            approved_snapshot_id=row.approved_snapshot_id,
+            owner_user_id=row.owner_user_id,
+            workspace_id=row.workspace_id,
+            project_id=row.project_id,
+            project_version_id=row.project_version_id,
+            export_version=row.export_version,
+            status=ExportPackageStatus(row.status),
+            storage_key=row.storage_key,
+            filename=row.filename,
+            sha256=row.sha256,
+            created_at=created_at,
         )
 
     @staticmethod

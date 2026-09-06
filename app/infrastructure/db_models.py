@@ -173,6 +173,54 @@ class GuidedTestRow(Base):
     completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class ApprovedVersionRow(Base):
+    __tablename__ = "approved_versions"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="RESTRICT"))
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.id", ondelete="RESTRICT"), index=True
+    )
+    project_version_id: Mapped[str] = mapped_column(
+        ForeignKey("project_versions.id", ondelete="RESTRICT"), unique=True
+    )
+    application_type: Mapped[str] = mapped_column(String(50))
+    name: Mapped[str] = mapped_column(String(120))
+    description: Mapped[str] = mapped_column(String(500))
+    behavior_config: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)
+    ui_config: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)
+    document_asset_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    behavioral_specification: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
+    evaluation_report: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
+    participant_validation: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
+    approved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ExportPackageRow(Base):
+    __tablename__ = "export_packages"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    approved_snapshot_id: Mapped[str] = mapped_column(
+        ForeignKey("approved_versions.id", ondelete="RESTRICT"), index=True
+    )
+    owner_user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="RESTRICT"))
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.id", ondelete="RESTRICT"), index=True
+    )
+    project_version_id: Mapped[str] = mapped_column(
+        ForeignKey("project_versions.id", ondelete="RESTRICT")
+    )
+    export_version: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(30))
+    storage_key: Mapped[str] = mapped_column(String(512), unique=True)
+    filename: Mapped[str] = mapped_column(String(255))
+    sha256: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (
+        UniqueConstraint("project_id", "export_version", name="uq_project_export_version"),
+    )
+
+
 class AIRunRow(Base):
     __tablename__ = "ai_runs"
     id: Mapped[str] = mapped_column(String(64), primary_key=True)

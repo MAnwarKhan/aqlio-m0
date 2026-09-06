@@ -115,7 +115,7 @@ def test_idea_evaluation_uses_same_adapter_without_weakening_document_grounding(
         adapter.generate(GenerationRequest("Explain policies", ()))
 
 
-def test_short_answer_configuration_keeps_grounding_instructions():
+def test_concise_style_keeps_grounding_and_completeness_instructions():
     response = SimpleNamespace(
         output_text='{"answer":"Yes.","cited_chunk_ids":["c"],"abstained":false}',
     )
@@ -129,11 +129,15 @@ def test_short_answer_configuration_keeps_grounding_instructions():
     )
     adapter.generate(
         GenerationRequest(
-            "Question", (RetrievedContext("a", "doc.txt", "c", "Yes."),), answer_length="short"
+            "List all items",
+            (RetrievedContext("a", "doc.txt", "c", "Yes."),),
+            response_style="concise",
+            complete_answer_required=True,
         )
     )
     assert "only from" in client.responses.kwargs["instructions"]
-    assert "short sentences" in client.responses.kwargs["instructions"]
+    assert "never omit information" in client.responses.kwargs["instructions"]
+    assert "complete-list request" in client.responses.kwargs["instructions"]
 
 
 def test_timeout_retries_are_bounded_and_normalized() -> None:

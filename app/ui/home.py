@@ -10,11 +10,18 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from app.application import M0Service, OperationsService, build_runtime_foundation
+from app.application.eligibility_advisor import PROGRAM_RULES, AdvisorInput, AdvisorResult
 from app.application.errors import AqlioError, ShareAccessError
 from app.application.journey import next_step, project_status
 from app.application.m0_service import Answer
 from app.config import Settings, SettingsError
-from app.domain import AssetStatus, ProjectStatus, PublicationVisibility
+from app.domain import (
+    ApplicationSpecification,
+    ApplicationType,
+    AssetStatus,
+    ProjectStatus,
+    PublicationVisibility,
+)
 from app.ports import AuthenticationRequired, ProviderCallError
 
 
@@ -125,6 +132,18 @@ def _render_create_project(service: M0Service) -> None:
         idea = st.text_area("What would you like to build or solve with AI?", max_chars=2000)
         evaluate = st.form_submit_button("Evaluate My Idea")
         submitted = st.form_submit_button("Continue", type="primary")
+    st.caption("Architecture reference test")
+    if st.button("Build Synthetic Eligibility Advisor"):
+        project = service.create_advisor_project(
+            name="Eligibility & Recommendation Advisor",
+            problem="Applicants need a transparent check against synthetic program requirements.",
+            users="People testing a fictional university-admission scenario.",
+            outcome="A deterministic eligibility result, explanation, gaps, and next actions.",
+        )
+        service.build_advisor_working_version(project.id)
+        st.session_state["project_id"] = project.id
+        st.session_state["new_project"] = False
+        _go(project.id, "test")
     if submitted or evaluate:
         try:
             project = service.create_idea(idea)
@@ -143,6 +162,12 @@ def _render_create_project(service: M0Service) -> None:
 def _render_project(service: M0Service, project_id: str) -> None:
     try:
         project = service.get_my_project(project_id)
+        if (
+            project.metadata.get("template")
+            == ApplicationType.ELIGIBILITY_RECOMMENDATION_ADVISOR.value
+        ):
+            _render_advisor(service, project_id)
+            return
         st.header(project.name)
         st.caption(project_status(project))
         notice = st.session_state.pop(f"notice-{project_id}", None)
@@ -151,7 +176,7 @@ def _render_project(service: M0Service, project_id: str) -> None:
         step = st.session_state.get(f"step-{project_id}", next_step(project))
         if step in {"test", "improve", "run"} and not project.prepared_document_count:
             step = next_step(project)
-        if step in {"improve", "run"} and not project.guided_test_count:
+        if step == "run" and not project.guided_test_count:
             step = "test"
         if step == "define":
             _render_definition(service, project_id)
@@ -166,6 +191,65 @@ def _render_project(service: M0Service, project_id: str) -> None:
             _render_publication(service, publication.id)
     except (AqlioError, ProviderCallError) as exc:
         st.error(str(exc))
+
+
+def _render_advisor(service: M0Service, project_id: str) -> None:
+    project = service.get_my_project(project_id)
+    specification = service.get_application_specification(project_id)
+    st.header(specification.name)
+    st.caption("Synthetic reference application · Working Version")
+    st.warning("This uses fictional program rules and does not predict real admission outcomes.")
+    st.write(specification.description)
+    _render_behavioral_evaluation(service, project_id, specification)
+    courses = sorted({course for rule in PROGRAM_RULES for course in rule.prerequisite_courses})
+    with st.form(f"advisor-test-{project.current_version_id}"):
+        gpa = st.number_input("GPA", min_value=0.0, max_value=4.0, step=0.1)
+        completed = st.multiselect("Completed prerequisite courses", courses)
+        program = st.selectbox("Target program", [rule.program for rule in PROGRAM_RULES])
+        tested = st.form_submit_button("Test Advisor", type="primary")
+    result_key = f"advisor-result-{project.id}-{project.current_version_id}"
+    if tested:
+        st.session_state[result_key] = service.test_advisor(
+            project.id, AdvisorInput(gpa, tuple(completed), program)
+        )
+        st.rerun()
+    result = st.session_state.get(result_key)
+    if isinstance(result, AdvisorResult):
+        st.subheader(result.eligibility_status.replace("_", " ").title())
+        st.write(result.explanation)
+        st.markdown("**Satisfied requirements**")
+        for item in result.satisfied_requirements:
+            st.write(f"✓ {item}")
+        st.markdown("**Unmet requirements**")
+        for item in result.unmet_requirements:
+            st.write(f"○ {item}")
+        st.markdown("**Recommended next actions or alternatives**")
+        for item in result.recommended_next_actions:
+            st.write(f"- {item}")
+        st.caption(result.disclaimer)
+        if st.button("Yes, it worked"):
+            service.confirm_advisor_test_success(project.id)
+            st.rerun()
+    project = service.get_my_project(project_id)
+    with st.expander("Improve Working Version"):
+        with st.form(f"advisor-improve-{project.current_version_id}"):
+            request = st.text_area("What would you like to improve?", max_chars=2000)
+            title = st.text_input("Application title", value=specification.name)
+            style = st.selectbox("Recommendation style", ["direct", "supportive"])
+            apply = st.form_submit_button("Apply Improvement")
+        if apply:
+            service.apply_advisor_improvement(
+                project.id, request, title=title, recommendation_style=style
+            )
+            st.success("A new Working Version was created. Test and evaluate it again.")
+            st.rerun()
+    if (
+        project.guided_test_count
+        and specification.evaluation_report
+        and st.button("Approve Working Version")
+    ):
+        service.approve_working_version(project.id)
+        st.success("Approved Version created. It is immutable and includes evaluation evidence.")
 
 
 _DEFINITION_FIELDS = {
@@ -275,30 +359,64 @@ def _render_documents(service: M0Service, project_id: str) -> None:
 
 def _render_testing(service: M0Service, project_id: str, *, running: bool = False) -> None:
     project = service.get_my_project(project_id)
+    specification = service.get_application_specification(project_id)
+    ui_config = dict(specification.ui_config)
     st.subheader("Working Version")
     st.caption("Improvements change this version only. Publish an update when ready.")
-    st.write("Run Application" if running else "Test My Application")
-    st.write(
+    st.markdown(f"### {specification.name}")
+    instructions = specification.description or (
         "Use the application you built inside Aqlio."
         if running
         else "Ask a question your users might ask. Check the answer and its sources."
     )
+    st.write(instructions)
+    _render_behavioral_evaluation(service, project_id, specification)
     key = f"answer-{project_id}-{project.current_version_id}-{'run' if running else 'test'}"
-    with st.form(f"question-{project_id}-{'run' if running else 'test'}"):
-        question = st.text_input("Ask a question")
-        ask = st.form_submit_button("Ask" if running else "Test Your Assistant", type="primary")
-    if ask:
-        st.session_state.pop(key, None)
-        st.session_state[key] = (
-            service.run_application(project_id, question)
-            if running
-            else service.ask_question(project_id, question, guided=True)
-        )
+
+    def render_question_box() -> None:
+        with st.form(f"question-{project_id}-{'run' if running else 'test'}"):
+            question = st.text_input("Ask a question")
+            ask = st.form_submit_button("Ask" if running else "Test Your Assistant", type="primary")
+        if ask:
+            st.session_state.pop(key, None)
+            st.session_state[key] = (
+                service.run_application(project_id, question)
+                if running
+                else service.ask_question(project_id, question, guided=True)
+            )
+            st.rerun()
+
+    if ui_config.get("question_position", "top") == "top":
+        render_question_box()
     answer = st.session_state.get(key)
     if answer:
-        _render_answer(answer)
+        _render_answer(answer, ui_config)
+    if ui_config.get("question_position") == "bottom":
+        render_question_box()
     project = service.get_my_project(project_id)
-    if answer and not answer.abstained:
+    pending = bool(
+        answer is not None
+        and project.metadata.get("pending_test_correlation_id") == answer.correlation_id
+    )
+    feedback_key = f"feedback-{project_id}-{project.current_version_id}"
+    if answer is not None and pending and not running:
+        st.write("Did your application answer this correctly?")
+        if st.button("Yes, it worked", disabled=answer.abstained):
+            service.confirm_test_success(project_id, answer.correlation_id)
+            st.session_state.pop(feedback_key, None)
+            st.rerun()
+        if st.button("Needs Improvement"):
+            st.session_state[feedback_key] = True
+            st.rerun()
+        if st.session_state.get(feedback_key):
+            with st.form(f"test-feedback-{project_id}"):
+                feedback = st.text_area("What was wrong with the answer?", max_chars=2000)
+                submitted = st.form_submit_button("Continue to Improve", type="primary")
+            if submitted:
+                service.record_test_feedback(project_id, answer.correlation_id, feedback)
+                st.session_state.pop(feedback_key, None)
+                _go(project_id, "improve")
+    elif answer and not answer.abstained and not running:
         st.success("Your application is working with this question")
     if project.guided_test_count:
         if st.button("Test Again"):
@@ -310,45 +428,118 @@ def _render_testing(service: M0Service, project_id: str, *, running: bool = Fals
             _go(project_id, "run")
         _render_readiness(service, project_id)
     elif st.button("Improve"):
-        _go(project_id, "build")
+        _go(project_id, "improve")
 
 
-def _render_answer(answer: Answer) -> None:
+def _render_answer(answer: Answer, ui_config: dict[str, str] | None = None) -> None:
+    ui_config = ui_config or {}
     if answer.abstained:
         st.warning(
             "I couldn't find enough information in your documents to answer that confidently."
         )
     else:
-        st.text(answer.text)
+        layout = ui_config.get("response_layout", "prose")
+        if ui_config.get("display_density") == "detailed":
+            st.caption("Answer from the Working Version, followed by its authorized sources.")
+        if layout == "table":
+            st.table({"Answer": [answer.text]})
+        elif layout == "list":
+            st.markdown(f"- {answer.text}")
+        else:
+            st.write(answer.text)
         st.markdown("**Sources**")
-        for citation in answer.citations:
-            st.text(f"{citation.document_name} — source passage")
+        if ui_config.get("citation_presentation") == "compact":
+            st.caption(", ".join(dict.fromkeys(item.document_name for item in answer.citations)))
+        else:
+            for citation in answer.citations:
+                st.text(f"{citation.document_name} — source passage")
+
+
+def _render_behavioral_evaluation(
+    service: M0Service, project_id: str, specification: ApplicationSpecification
+) -> None:
+    behavioral = specification.behavioral_specification
+    report = specification.evaluation_report
+    if behavioral is None:
+        return
+    st.markdown("**Behavioral evaluation**")
+    st.caption(
+        "Automated checks support your judgment. They do not decide whether the application "
+        "meets your needs."
+    )
+    statuses = {item.requirement_id: item for item in report.results} if report else {}
+    with st.expander("See requirements and acceptance checks"):
+        for requirement in behavioral.requirements:
+            result = statuses.get(requirement.id)
+            label = result.status.value.replace("_", " ").title() if result else "Not Yet Tested"
+            st.write(f"{requirement.id} — {label}: {requirement.description}")
+            if result:
+                st.caption(result.explanation)
+    if st.button("Run Behavioral Evaluation"):
+        service.evaluate_working_version(project_id)
+        st.rerun()
+    failures = [item for item in statuses.values() if item.status.value == "FAIL"]
+    if failures and st.button("Improve Failed Requirements"):
+        service.improve_failed_evaluation(project_id)
+        _go(project_id, "improve")
 
 
 def _render_improve(service: M0Service, project_id: str) -> None:
+    project = service.get_my_project(project_id)
     st.subheader("Improve Working Version")
     st.info(
         "Changes affect the Working Version. Your Published Version stays unchanged "
         "until you publish a new version."
     )
-    st.write(
-        "For this first version, you can change answer length or add clearer source documents."
-    )
-    st.caption(
-        "Only the selected answer length is applied. Summaries, comparisons, "
-        "and other new behaviors are not built automatically."
-    )
+    st.write("Describe how answers should improve, then review the change before applying it.")
+    proposal_key = f"improvement-proposal-{project_id}-{project.current_version_id}"
+    applied_key = f"improvement-applied-{project_id}"
+    current_version = service.repository.get_version(project.current_version_id or "")
+    config = dict(current_version.assistant_config) if current_version else {}
+    default_style = config.get("response_style", "balanced")
+    feedback = project.metadata.get("improvement_feedback", "")
     with st.form(f"improve-{project_id}"):
-        request = st.text_area("What would you like to improve?", max_chars=2000)
-        length = st.selectbox(
-            "Answer length",
-            ["short", "standard"],
-            format_func=lambda value: "Shorter answers" if value == "short" else "Standard answers",
+        request = st.text_area("What would you like to improve?", value=feedback, max_chars=2000)
+        styles = ["concise", "balanced", "detailed"]
+        style = st.selectbox(
+            "Response style",
+            styles,
+            index=styles.index(default_style) if default_style in styles else 1,
+            format_func=str.title,
         )
-        apply = st.form_submit_button("Apply Answer Length")
-    if apply:
-        service.improve_application(project_id, request, answer_length=length)
-        _go(project_id, "test")
+        review = st.form_submit_button("Review Improvement", type="primary")
+    if review:
+        proposed_change = service.propose_improvement(project_id, request, response_style=style)
+        st.session_state[proposal_key] = {
+            "request": proposed_change.request,
+            "response_style": proposed_change.response_style,
+            "summary": proposed_change.summary,
+            "supported": proposed_change.supported,
+            "participant_message": proposed_change.participant_message,
+        }
+        st.session_state.pop(applied_key, None)
+        st.rerun()
+    saved_proposal = st.session_state.get(proposal_key)
+    if saved_proposal:
+        st.markdown("**Proposed change**")
+        st.write(saved_proposal["summary"])
+        if not saved_proposal["supported"]:
+            st.info(saved_proposal["participant_message"])
+        if st.button("Apply Improvement", type="primary", disabled=not saved_proposal["supported"]):
+            version = service.apply_improvement(
+                project_id,
+                saved_proposal["request"],
+                response_style=saved_proposal["response_style"],
+            )
+            st.session_state[applied_key] = version.id
+            st.session_state.pop(proposal_key, None)
+            st.rerun()
+    project = service.get_my_project(project_id)
+    if st.session_state.get(applied_key) == project.current_version_id:
+        st.success("Improvement applied to the Working Version. Test it again before publishing.")
+        if st.button("Test Again", type="primary"):
+            st.session_state.pop(applied_key, None)
+            _go(project_id, "test")
     if st.button("Add Better Documents"):
         _go(project_id, "build")
     pdfs = [
@@ -366,6 +557,104 @@ def _render_improve(service: M0Service, project_id: str) -> None:
             _go(project_id, "test")
     if st.button("Back to Testing"):
         _go(project_id, "test")
+    st.divider()
+    _render_ui_improve(service, project_id)
+
+
+def _render_ui_improve(service: M0Service, project_id: str) -> None:
+    specification = service.get_application_specification(project_id)
+    config = dict(specification.ui_config)
+    proposal_key = f"ui-improvement-proposal-{project_id}-{specification.project_version_id}"
+    applied_key = f"ui-improvement-applied-{project_id}"
+    st.subheader("Improve Look & Experience")
+    st.write("Choose from the supported changes. Review them before updating your Working Version.")
+    with st.form(f"ui-improve-{project_id}"):
+        request = st.text_area("What would you like to improve about the screen?", max_chars=2000)
+        title = st.text_input("Application title", value=specification.name, max_chars=120)
+        instructions = st.text_area(
+            "Instructions for users",
+            value=specification.description or "Ask a question about the documents.",
+            max_chars=500,
+        )
+        question_position = st.selectbox(
+            "Question box position",
+            ["top", "bottom"],
+            index=0 if config.get("question_position", "top") == "top" else 1,
+            format_func=str.title,
+        )
+        layouts = ["prose", "list", "table"]
+        current_layout = config.get("response_layout", "prose")
+        response_layout = st.selectbox(
+            "Answer layout",
+            layouts,
+            index=layouts.index(current_layout) if current_layout in layouts else 0,
+            format_func=str.title,
+        )
+        citation_options = ["expanded", "compact"]
+        current_citations = config.get("citation_presentation", "expanded")
+        citation_presentation = st.selectbox(
+            "Source display",
+            citation_options,
+            index=(
+                citation_options.index(current_citations)
+                if current_citations in citation_options
+                else 0
+            ),
+            format_func=str.title,
+        )
+        densities = ["concise", "balanced", "detailed"]
+        current_density = config.get("display_density", "balanced")
+        display_density = st.selectbox(
+            "Display detail",
+            densities,
+            index=densities.index(current_density) if current_density in densities else 1,
+            format_func=str.title,
+        )
+        review = st.form_submit_button("Review Look & Experience", type="primary")
+    if review:
+        proposal = service.propose_ui_improvement(
+            project_id,
+            request,
+            title=title,
+            instructions=instructions,
+            question_position=question_position,
+            response_layout=response_layout,
+            citation_presentation=citation_presentation,
+            display_density=display_density,
+        )
+        st.session_state[proposal_key] = {
+            "request": proposal.request,
+            "ui_config": proposal.ui_config,
+            "summary": proposal.summary,
+            "supported": proposal.supported,
+            "participant_message": proposal.participant_message,
+        }
+        st.rerun()
+    saved = st.session_state.get(proposal_key)
+    if saved:
+        st.markdown("**Proposed look and experience**")
+        st.write(saved["summary"])
+        if not saved["supported"]:
+            st.info(saved["participant_message"])
+        if st.button(
+            "Apply Look & Experience",
+            type="primary",
+            disabled=not saved["supported"],
+        ):
+            version = service.apply_ui_improvement(
+                project_id,
+                saved["request"],
+                **saved["ui_config"],
+            )
+            st.session_state[applied_key] = version.id
+            st.session_state.pop(proposal_key, None)
+            st.rerun()
+    project = service.get_my_project(project_id)
+    if st.session_state.get(applied_key) == project.current_version_id:
+        st.success("Look and experience updated. See it now, then test the Working Version again.")
+        if st.button("See and Test Updated Application", type="primary"):
+            st.session_state.pop(applied_key, None)
+            _go(project_id, "test")
 
 
 def _render_readiness(service: M0Service, project_id: str) -> None:
@@ -373,6 +662,7 @@ def _render_readiness(service: M0Service, project_id: str) -> None:
     if project.has_blocking_preparation_error:
         st.warning("Resolve document issues in Improve before publishing.")
         return
+    _render_approval(service, project_id)
     if project.status != ProjectStatus.DEPLOYED:
         st.caption("Publish a private snapshot of this Working Version inside Aqlio.")
         if st.button("Publish Application"):
@@ -380,6 +670,107 @@ def _render_readiness(service: M0Service, project_id: str) -> None:
             st.rerun()
     else:
         st.caption("This Working Version is already published.")
+
+
+def _render_approval(service: M0Service, project_id: str) -> None:
+    project = service.get_my_project(project_id)
+    specification = service.get_application_specification(project_id)
+    approved = service.latest_approved_version(project_id)
+    current_is_approved = bool(
+        approved and approved.specification.project_version_id == specification.project_version_id
+    )
+    st.subheader("Approve Working Version")
+    st.write(
+        "Approval means: This version works the way I want and can now be used as the basis "
+        "for publishing or generating application source code."
+    )
+    with st.expander("Review this version before approval"):
+        st.write(f"Application: {specification.name}")
+        st.write(f"Definition: {project.metadata.get('idea', project.description or 'Not added')}")
+        st.write("Supported functionality: grounded answers from authorized documents with sources")
+        st.write(
+            "Functional improvement: "
+            + specification.behavior_config.get("improvement_request", "No applied change")
+        )
+        st.write(
+            "Look and experience: "
+            + ", ".join(
+                f"{key.replace('_', ' ')}: {value}"
+                for key, value in specification.ui_config.items()
+                if key != "improvement_request"
+            )
+            if specification.ui_config
+            else "Look and experience: Default"
+        )
+        documents = service.list_documents(project_id)
+        st.write(
+            "Sources: " + (", ".join(item.original_name for item in documents) or "No documents")
+        )
+        st.write(f"Current version: {specification.project_version_id}")
+        report = specification.evaluation_report
+        if report:
+            passed = sum(item.status.value == "PASS" for item in report.results)
+            failed = sum(item.status.value == "FAIL" for item in report.results)
+            untested = len(report.results) - passed - failed
+            st.write(
+                f"Behavioral evaluation: {passed} passed, {failed} failed, "
+                f"{untested} not yet tested"
+            )
+        else:
+            st.write("Behavioral evaluation: Not yet tested")
+    behavioral = specification.behavioral_specification
+    required_ids = (
+        {
+            criterion_id
+            for requirement in behavioral.requirements
+            if requirement.required
+            for criterion_id in requirement.acceptance_criterion_ids
+        }
+        if behavioral
+        else set()
+    )
+    result_statuses = (
+        {
+            result.acceptance_criterion_id: result.status.value
+            for result in specification.evaluation_report.results
+        }
+        if specification.evaluation_report
+        else {}
+    )
+    evaluation_ready = bool(required_ids) and all(
+        result_statuses.get(criterion_id) == "PASS" for criterion_id in required_ids
+    )
+    if not current_is_approved or approved is None:
+        if st.button("Approve This Version", type="primary", disabled=not evaluation_ready):
+            service.approve_working_version(project_id)
+            st.rerun()
+        return
+    st.success(f"Approved Version: {approved.id}")
+    st.write("Choose what you want to do next.")
+    if st.button("Run in Aqlio"):
+        _go(project_id, "run")
+    if st.button("Publish in Aqlio"):
+        service.publish_working_application(project_id)
+        st.rerun()
+    export_key = f"application-export-{approved.id}"
+    if st.button("Get My Application Code"):
+        package = service.generate_application_export(project_id)
+        st.session_state[export_key] = package.id
+        st.rerun()
+    package_id = st.session_state.get(export_key)
+    if package_id:
+        download = service.download_application_export(package_id)
+        st.success("Your application code is ready for independent deployment.")
+        st.download_button(
+            "Download Application Code",
+            data=download.content,
+            file_name=download.package.filename,
+            mime="application/zip",
+        )
+        st.caption(
+            "The package excludes private source documents. Add production documents after setup."
+        )
+    st.caption("Approval and code export do not publish or commercially deploy this application.")
 
 
 def _render_publication(service: M0Service, publication_id: str) -> None:

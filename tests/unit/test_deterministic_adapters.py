@@ -31,6 +31,7 @@ def test_fake_generation_cites_context_and_abstains_without_it() -> None:
     abstained = adapter.generate(GenerationRequest("What is the policy?", []))
 
     assert grounded.citations[0].document_name == "guide.txt"
+    assert grounded.answer == "Leave is available after 30 days."
     assert not grounded.abstained
     assert abstained.abstained
     assert abstained.citations == ()

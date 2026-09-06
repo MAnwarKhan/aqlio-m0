@@ -14,6 +14,7 @@ def test_complete_deterministic_participant_journey() -> None:
 
     grounded = service.ask_question(project.id, "When is annual leave available?", guided=True)
     unsupported = service.ask_question(project.id, "What food is served on Friday?")
+    service.confirm_test_success(project.id, grounded.correlation_id)
     service.confirm_readiness(project.id)
     publication = service.deploy(project.id, idempotency_key="journey-deploy")
     private = service.open_private(publication.id)
@@ -32,7 +33,7 @@ def test_complete_deterministic_participant_journey() -> None:
         "DOCUMENT_UPLOADED",
         "DOCUMENT_PREPARATION_STARTED",
         "DOCUMENT_PREPARED",
-        "TEST_COMPLETED",
+        "TEST_CONFIRMED",
         "READINESS_CONFIRMED",
         "PUBLICATION_CREATED",
         "SHARING_ENABLED",

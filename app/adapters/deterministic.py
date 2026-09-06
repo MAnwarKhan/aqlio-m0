@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from itertools import count
 from uuid import uuid4
 
+from app.domain.application_lifecycle import ApprovedVersionSnapshot, ExportPackage
 from app.domain.models import (
     Asset,
     AuditEvent,
@@ -23,7 +24,8 @@ from app.domain.models import (
     Workspace,
     WorkspaceMember,
 )
-from app.ports.contracts import Citation, EmbeddingResponse, GenerationRequest, GenerationResponse
+from app.ports.contracts import EmbeddingResponse, GenerationRequest, GenerationResponse
+from app.question_answering import grounded_fake_answer
 
 
 class DeterministicDevelopmentAuth:
@@ -101,12 +103,7 @@ class FakeGenerationAdapter:
                 citations=(),
                 abstained=True,
             )
-        source = request.context[0]
-        excerpt = " ".join(source.text.split())[: 120 if request.answer_length == "short" else 240]
-        return GenerationResponse(
-            answer=f"Based on {source.document_name}: {excerpt}",
-            citations=(Citation(source.document_name, source.chunk_id),),
-        )
+        return grounded_fake_answer(request.question, request.context)
 
 
 class InMemoryProjectRepository:
@@ -152,6 +149,8 @@ class InMemoryM0Repository:
         self.versions: dict[str, ProjectVersion] = {}
         self.chunks: dict[str, DocumentChunk] = {}
         self.guided_tests: list[GuidedTest] = []
+        self.approved_versions: dict[str, ApprovedVersionSnapshot] = {}
+        self.export_packages: dict[str, ExportPackage] = {}
         self.usage_events: list[UsageEvent] = []
         self.lifecycle_events: list[LifecycleEvent] = []
         self.audit_events: list[AuditEvent] = []
@@ -258,6 +257,35 @@ class InMemoryM0Repository:
 
     def save_guided_test(self, test: GuidedTest) -> None:
         self.guided_tests.append(test)
+
+    def list_guided_tests(self, project_id: str) -> list[GuidedTest]:
+        return [test for test in self.guided_tests if test.project_id == project_id]
+
+    def save_approved_version(self, snapshot: ApprovedVersionSnapshot) -> None:
+        if snapshot.id in self.approved_versions:
+            raise ValueError("Approved Version snapshots are immutable.")
+        self.approved_versions[snapshot.id] = snapshot
+
+    def get_approved_version(self, snapshot_id: str) -> ApprovedVersionSnapshot | None:
+        return self.approved_versions.get(snapshot_id)
+
+    def list_approved_versions(self, project_id: str) -> list[ApprovedVersionSnapshot]:
+        return [
+            snapshot
+            for snapshot in self.approved_versions.values()
+            if snapshot.specification.project_id == project_id
+        ]
+
+    def save_export_package(self, package: ExportPackage) -> None:
+        if package.id in self.export_packages:
+            raise ValueError("Export Package records are immutable.")
+        self.export_packages[package.id] = package
+
+    def get_export_package(self, package_id: str) -> ExportPackage | None:
+        return self.export_packages.get(package_id)
+
+    def list_export_packages(self, project_id: str) -> list[ExportPackage]:
+        return [item for item in self.export_packages.values() if item.project_id == project_id]
 
     def save_usage(self, event: UsageEvent) -> None:
         self.usage_events.append(event)

@@ -1,6 +1,9 @@
 from types import SimpleNamespace
 
+import pytest
+
 from app.application import documents
+from app.application.errors import ValidationError
 from tests.helpers import build_service
 
 
@@ -19,6 +22,27 @@ def test_pdf_repairs_are_targeted_and_do_not_change_other_formats(monkeypatch):
     )
 
 
+def test_true_txt_is_clean_and_rtf_masquerading_as_txt_is_rejected() -> None:
+    content = b"Clean plain text.\nSecond line."
+    name, media_type = documents.validate_document(
+        filename="notes.txt",
+        content=content,
+        allowed_types=frozenset({"txt"}),
+        max_size_bytes=1024,
+    )
+    assert (name, media_type) == ("notes.txt", "text/plain")
+    assert documents.extract_text(name, content) == "Clean plain text.\nSecond line."
+
+    disguised_rtf = b"{\\rtf1\\ansi{\\fonttbl{\\f0 Helvetica;}}\\cocoatextscaling0 Raw}"
+    with pytest.raises(ValidationError, match="contains RTF formatting"):
+        documents.validate_document(
+            filename="disguised.txt",
+            content=disguised_rtf,
+            allowed_types=frozenset({"txt"}),
+            max_size_bytes=1024,
+        )
+
+
 def test_pdf_repairs_reach_grounded_answers_without_mutating_publication(monkeypatch):
     raw = "The Plalorm stores documentaFon about invenFons and informaFon."
     monkeypatch.setattr(
@@ -32,6 +56,7 @@ def test_pdf_repairs_reach_grounded_answers_without_mutating_publication(monkeyp
     answer = service.ask_question(project.id, "What information is stored?", guided=True)
     assert "documentation" in answer.text and "inventions" in answer.text
     assert "informaFon" not in answer.text and answer.citations
+    service.confirm_test_success(project.id, answer.correlation_id)
     # Successful testing is sufficient; Run is now a peer action rather than a publishing gate.
     publication = service.publish_working_application(project.id)
     asset = service.list_documents(project.id)[0]

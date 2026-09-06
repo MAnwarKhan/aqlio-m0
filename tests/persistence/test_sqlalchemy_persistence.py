@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from app.adapters import (
@@ -17,6 +18,7 @@ from app.adapters import (
     UUIDIdFactory,
 )
 from app.application import M0Service
+from app.application.eligibility_advisor import AdvisorInput
 from app.application.errors import AuthorizationError, ShareAccessError
 from app.config import Settings
 from app.domain import PublicationVisibility, UsageEvent, User
@@ -58,7 +60,8 @@ def test_migration_and_complete_state_survive_reconstruction(
         project.id, "employee_handbook.txt", fixture_bytes("employee_handbook.txt")
     )
     first.prepare_document(project.id, asset.id)
-    first.ask_question(project.id, "When is annual leave available?", guided=True)
+    answer = first.ask_question(project.id, "When is annual leave available?", guided=True)
+    first.confirm_test_success(project.id, answer.correlation_id)
     first.confirm_readiness(project.id)
     publication = first.deploy(project.id, idempotency_key="durable-deploy")
     receipt = first.enable_link_sharing(publication.id)
@@ -173,9 +176,13 @@ def test_journey_and_version_configuration_survive_restart(tmp_path, monkeypatch
     service.add_and_prepare_document(
         project.id, "handbook.txt", fixture_bytes("employee_handbook.txt")
     )
-    service.improve_application(project.id, "Shorter answers", answer_length="short")
+    service.apply_improvement(project.id, "Use direct wording", response_style="concise")
     question = "When is annual leave available?"
-    service.ask_question(project.id, question, guided=True)
+    answer = service.ask_question(project.id, question, guided=True)
+    service.confirm_test_success(project.id, answer.correlation_id)
+    approved = service.approve_working_version(project.id)
+    exported = service.generate_application_export(project.id)
+    exported_bytes = service.download_application_export(exported.id).content
     service.run_application(project.id, question)
     publication = service.publish_working_application(project.id)
     receipt = service.enable_link_sharing(publication.id)
@@ -188,15 +195,23 @@ def test_journey_and_version_configuration_survive_restart(tmp_path, monkeypatch
     assert loaded.metadata["publication_id"] == publication.id
     assert restarted.repository.get_version(loaded.current_version_id).assistant_config == {
         "template": "ASK_MY_DOCUMENTS",
+        "behavioral_schema": "ask-my-documents.behavior.v1",
         "policy": "GROUNDED_OR_ABSTAIN",
-        "answer_length": "short",
-        "improvement_request": "Shorter answers",
+        "spec_problem": "Hard to find answers",
+        "spec_users": "Employees",
+        "spec_outcome": "Clear answers",
+        "response_style": "concise",
+        "response_guidance": "Use direct wording",
+        "improvement_request": "Use direct wording",
     }
     assert restarted.repository.get_publication(publication.id).assistant_config == (
         publication.assistant_config
     )
+    assert restarted.get_approved_version(approved.id) == approved
+    assert restarted.repository.get_export_package(exported.id) == exported
+    assert restarted.download_application_export(exported.id).content == exported_bytes
     before = restarted.ask_shared(receipt.token, question)
-    restarted.improve_application(project.id, "Standard answers", answer_length="standard")
+    restarted.apply_improvement(project.id, "Use explanatory wording", response_style="balanced")
     assert restarted.ask_shared(receipt.token, question).text == before.text
 
 
@@ -212,3 +227,136 @@ def test_journey_migration_upgrades_existing_rows(tmp_path, monkeypatch):
     loaded = service_for(url, tmp_path / "private").get_my_project(project.id)
     assert loaded.name == "Existing project"
     assert loaded.metadata == {"template": "ASK_MY_DOCUMENTS"}
+
+
+def test_advisor_approval_and_validation_evidence_survive_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    url = f"sqlite:///{tmp_path / 'advisor.db'}"
+    root = tmp_path / "private"
+    migrate(url, monkeypatch)
+    first = service_for(url, root)
+    project = first.create_advisor_project(
+        name="Durable Synthetic Advisor",
+        problem="Synthetic requirements are hard to compare.",
+        users="People testing fictional admission scenarios.",
+        outcome="Transparent deterministic results and next actions.",
+    )
+    first.build_advisor_working_version(project.id)
+    first.evaluate_working_version(project.id)
+    first.test_advisor(
+        project.id,
+        AdvisorInput(3.0, ("Algebra", "Academic Writing"), "Computing Foundations"),
+    )
+    first.confirm_advisor_test_success(project.id)
+    approved = first.approve_working_version(project.id)
+    assert approved.participant_validation is not None
+
+    restarted = service_for(url, root)
+    reconstructed = restarted.get_approved_version(approved.id)
+    assert reconstructed == approved
+    assert reconstructed.specification.behavioral_specification == (
+        approved.specification.behavioral_specification
+    )
+    assert reconstructed.specification.evaluation_report == (
+        approved.specification.evaluation_report
+    )
+    assert reconstructed.participant_validation == approved.participant_validation
+    assert reconstructed.specification.application_type.value == (
+        "ELIGIBILITY_RECOMMENDATION_ADVISOR"
+    )
+
+    restarted.apply_advisor_improvement(
+        project.id,
+        "Use a supportive recommendation style.",
+        title="Changed Working Advisor",
+        recommendation_style="supportive",
+    )
+    after_change = service_for(url, root).get_approved_version(approved.id)
+    assert after_change == reconstructed
+    assert after_change.specification.name == "Durable Synthetic Advisor"
+    outsider = service_for(
+        url, root, User("advisor-outsider", "advisor-outsider@example.com", "Outsider")
+    )
+    with pytest.raises(AuthorizationError):
+        outsider.get_approved_version(approved.id)
+
+
+def test_approved_reconstruction_fails_closed_for_unknown_or_mismatched_schema(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    url = f"sqlite:///{tmp_path / 'fail-closed.db'}"
+    root = tmp_path / "private"
+    migrate(url, monkeypatch)
+    service = service_for(url, root)
+    project = service.create_advisor_project(
+        name="Schema Test Advisor",
+        problem="Test schema dispatch.",
+        users="Architecture testers.",
+        outcome="Safe reconstruction.",
+    )
+    service.build_advisor_working_version(project.id)
+    service.test_advisor(
+        project.id,
+        AdvisorInput(3.0, ("Algebra", "Academic Writing"), "Computing Foundations"),
+    )
+    service.confirm_advisor_test_success(project.id)
+    approved = service.approve_working_version(project.id)
+    engine = create_database_engine(url)
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE approved_versions SET behavioral_specification = "
+                "json_set(behavioral_specification, '$.schema_version', :schema) WHERE id = :id"
+            ),
+            {"schema": "unknown.behavior.v99", "id": approved.id},
+        )
+    with pytest.raises(ValueError, match="Unsupported Behavioral Specification schema"):
+        service_for(url, root).get_approved_version(approved.id)
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE approved_versions SET behavioral_specification = "
+                "json_set(behavioral_specification, '$.schema_version', :schema) WHERE id = :id"
+            ),
+            {"schema": "ask-my-documents.behavior.v1", "id": approved.id},
+        )
+    with pytest.raises(ValueError, match="does not match the persisted application type"):
+        service_for(url, root).get_approved_version(approved.id)
+
+    with engine.begin() as connection:
+        connection.execute(
+            text("UPDATE approved_versions SET application_type = :kind WHERE id = :id"),
+            {"kind": "UNKNOWN_APPLICATION", "id": approved.id},
+        )
+    with pytest.raises(ValueError, match="UNKNOWN_APPLICATION"):
+        service_for(url, root).get_approved_version(approved.id)
+
+
+def test_legacy_approval_without_snapshotted_validation_remains_readable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    url = f"sqlite:///{tmp_path / 'legacy-approval.db'}"
+    root = tmp_path / "private"
+    migrate(url, monkeypatch)
+    service = service_for(url, root)
+    project = service.create_project("Legacy Approval")
+    asset = service.upload_document(
+        project.id, "employee_handbook.txt", fixture_bytes("employee_handbook.txt")
+    )
+    service.prepare_document(project.id, asset.id)
+    answer = service.ask_question(project.id, "When is annual leave available?", guided=True)
+    service.confirm_test_success(project.id, answer.correlation_id)
+    approved = service.approve_working_version(project.id)
+
+    with create_database_engine(url).begin() as connection:
+        connection.execute(
+            text("UPDATE approved_versions SET participant_validation = NULL WHERE id = :id"),
+            {"id": approved.id},
+        )
+    reconstructed = service_for(url, root).get_approved_version(approved.id)
+    assert reconstructed.specification == approved.specification
+    assert reconstructed.approved_at == approved.approved_at
+    assert reconstructed.participant_validation is None

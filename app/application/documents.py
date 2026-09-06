@@ -19,6 +19,13 @@ _MEDIA_TYPES = {
 }
 
 
+def _looks_like_rtf(content: bytes) -> bool:
+    sample = content[:4096].lstrip().lower()
+    return sample.startswith(b"{\\rtf") or (
+        b"\\fonttbl" in sample and b"\\cocoatextscaling" in sample
+    )
+
+
 def validate_document(
     *,
     filename: str,
@@ -43,6 +50,10 @@ def validate_document(
     if extension == "docx" and not content.startswith(b"PK"):
         raise ValidationError("This DOCX does not appear to be a valid document.")
     if extension == "txt":
+        if _looks_like_rtf(content):
+            raise ValidationError(
+                "This .txt file contains RTF formatting. Save it as plain UTF-8 text and try again."
+            )
         try:
             content.decode("utf-8")
         except UnicodeDecodeError as exc:
@@ -113,8 +124,22 @@ def normalize_text(text: str) -> str:
 
 
 def chunk_text(text: str, *, max_words: int = 90) -> list[str]:
-    words = text.split()
-    return [" ".join(words[index : index + max_words]) for index in range(0, len(words), max_words)]
+    chunks: list[str] = []
+    current: list[str] = []
+    count = 0
+    for line in text.splitlines():
+        words = line.split()
+        while words:
+            available = max_words - count
+            current.append(" ".join(words[:available]))
+            count += min(len(words), available)
+            words = words[available:]
+            if count == max_words:
+                chunks.append("\n".join(current))
+                current, count = [], 0
+    if current:
+        chunks.append("\n".join(current))
+    return chunks
 
 
 def remove_untrusted_instruction_chunks(chunks: Sequence[str]) -> list[str]:

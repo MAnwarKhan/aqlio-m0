@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, Protocol
 
+from app.domain.application_lifecycle import ApprovedVersionSnapshot, ExportPackage
 from app.domain.models import (
     Asset,
     AuditEvent,
@@ -60,7 +61,9 @@ class GenerationRequest:
     question: str
     context: Sequence[RetrievedContext]
     purpose: Literal["document_answer", "idea_evaluation"] = "document_answer"
-    answer_length: Literal["standard", "short"] = "standard"
+    response_style: Literal["concise", "balanced", "detailed"] = "balanced"
+    response_guidance: str = ""
+    complete_answer_required: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,6 +162,20 @@ class M0RepositoryPort(Protocol):
     def list_chunks(self, project_id: str, version_id: str) -> list[DocumentChunk]: ...
 
     def save_guided_test(self, test: GuidedTest) -> None: ...
+
+    def list_guided_tests(self, project_id: str) -> list[GuidedTest]: ...
+
+    def save_approved_version(self, snapshot: ApprovedVersionSnapshot) -> None: ...
+
+    def get_approved_version(self, snapshot_id: str) -> ApprovedVersionSnapshot | None: ...
+
+    def list_approved_versions(self, project_id: str) -> list[ApprovedVersionSnapshot]: ...
+
+    def save_export_package(self, package: ExportPackage) -> None: ...
+
+    def get_export_package(self, package_id: str) -> ExportPackage | None: ...
+
+    def list_export_packages(self, project_id: str) -> list[ExportPackage]: ...
 
     def save_usage(self, event: UsageEvent) -> None: ...
 

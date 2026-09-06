@@ -84,16 +84,15 @@ def test_improve_retest_run_and_publish_preserves_previous_publication():
         service.run_application(project_id, question)
     with pytest.raises(NotReadyError):
         service.publish_working_application(project_id)
-    service.ask_question(project_id, question, guided=True)
+    answer = service.ask_question(project_id, question, guided=True)
+    service.confirm_test_success(project_id, answer.correlation_id)
     service.run_application(project_id, question)
     assert project_status(service.get_my_project(project_id)) == "Working"
     publication = service.publish_working_application(project_id)
     receipt = service.enable_link_sharing(publication.id)
     original = service.ask_shared(receipt.token, question)
     old_version = service.get_my_project(project_id).current_version_id
-    version = service.improve_application(
-        project_id, "The answers are too long", answer_length="short"
-    )
+    version = service.apply_improvement(project_id, "Use direct wording", response_style="concise")
     assert version.id != old_version
     project = service.get_my_project(project_id)
     assert project.status == ProjectStatus.PREPARED
@@ -101,9 +100,9 @@ def test_improve_retest_run_and_publish_preserves_previous_publication():
     assert "run_version_id" not in project.metadata
     with pytest.raises(NotReadyError):
         service.publish_working_application(project_id)
-    short = service.ask_question(project_id, question, guided=True)
-    assert len(short.text) < len(original.text)
-    assert short.citations
+    improved = service.ask_question(project_id, question, guided=True)
+    assert improved.citations
+    service.confirm_test_success(project_id, improved.correlation_id)
     service.run_application(project_id, question)
     newer = service.publish_working_application(project_id)
     assert newer.id != publication.id
@@ -112,29 +111,32 @@ def test_improve_retest_run_and_publish_preserves_previous_publication():
     assert service.publish_working_application(project_id).id == newer.id
 
 
-def test_unsupported_improvements_do_not_create_versions():
+def test_invalid_improvements_do_not_create_versions():
     service = build_service()
     project_id, _ = prepare_project(service)
     before = service.get_my_project(project_id).current_version_id
     with pytest.raises(ValidationError):
         service.improve_application(project_id, "Build an agent", answer_length="agent")
     with pytest.raises(ValidationError):
-        service.improve_application(project_id, "Summarize everything", answer_length="standard")
+        service.apply_improvement(project_id, "", response_style="balanced")
     assert service.get_my_project(project_id).current_version_id == before
 
 
-def test_new_documents_require_current_version_test_and_keep_length():
+def test_new_documents_require_current_version_test_and_keep_style():
     service = build_service()
     project_id, _ = prepare_project(service)
-    service.improve_application(project_id, "Shorter", answer_length="short")
-    service.ask_question(project_id, "When is annual leave available?", guided=True)
+    service.apply_improvement(project_id, "Use direct wording", response_style="concise")
+    answer = service.ask_question(project_id, "When is annual leave available?", guided=True)
+    service.confirm_test_success(project_id, answer.correlation_id)
     service.run_application(project_id, "When is annual leave available?")
     service.add_and_prepare_document(project_id, "another.txt", b"More annual leave information.")
     project = service.get_my_project(project_id)
     assert project.guided_test_count == 0
     assert (
-        service.repository.get_version(project.current_version_id).assistant_config["answer_length"]
-        == "short"
+        service.repository.get_version(project.current_version_id).assistant_config[
+            "response_style"
+        ]
+        == "concise"
     )
 
 

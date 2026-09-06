@@ -4,7 +4,7 @@ from docx import Document
 from streamlit.testing.v1 import AppTest
 
 from app.ui import home
-from tests.helpers import build_service
+from tests.helpers import build_service, prepare_project
 
 
 def button(app, label):
@@ -64,6 +64,10 @@ def test_docx_selection_prepares_once_and_unlocks_test_without_add_button(monkey
     app.text_input[0].input("When is annual leave available?")
     button(app, "Test Your Assistant").click().run()
     assert not app.exception
+    assert service.get_my_project(project.id).guided_test_count == 0
+    assert any(item.value == "Did your application answer this correctly?" for item in app.markdown)
+    assert {"Yes, it worked", "Needs Improvement"} <= {item.label for item in app.button}
+    button(app, "Yes, it worked").click().run()
     assert service.get_my_project(project.id).guided_test_count == 1
     assert any(
         item.value == "Your application is working with this question" for item in app.success
@@ -71,6 +75,13 @@ def test_docx_selection_prepares_once_and_unlocks_test_without_add_button(monkey
     assert {"Test Again", "Improve", "Run Application", "Publish Application"} <= {
         item.label for item in app.button
     }
+    assert any(item.label == "Approve This Version" for item in app.button)
+    button(app, "Approve This Version").click().run()
+    assert {"Run in Aqlio", "Publish in Aqlio", "Get My Application Code"} <= {
+        item.label for item in app.button
+    }
+    button(app, "Get My Application Code").click().run()
+    assert any(item.label == "Download Application Code" for item in app.get("download_button"))
     assert not any(item.label == "Add Documents" for item in app.button)
     button(app, "Run Application").click().run()
     assert any(item.label == "Publish Application" for item in app.button)
@@ -97,3 +108,45 @@ def test_upload_failure_visible_and_not_retried_on_unrelated_rerun(monkeypatch):
     app.run()
     assert len(service.repository.list_lifecycle_events()) == events
     assert any(item.label == "Try Again" for item in app.button)
+
+
+def test_updated_look_and_experience_is_visible_in_working_version(monkeypatch):
+    service = build_service()
+    project_id, _ = prepare_project(service)
+    service.apply_ui_improvement(
+        project_id,
+        "Show a clearer title, put the question box at the bottom, and use a table.",
+        title="Handbook Answers",
+        instructions="Ask a workplace-policy question.",
+        question_position="bottom",
+        response_layout="table",
+        citation_presentation="compact",
+        display_density="detailed",
+    )
+    monkeypatch.setattr(home, "_service", lambda: service)
+    app = AppTest.from_file("streamlit_app.py")
+    app.session_state["project_id"] = project_id
+    app.session_state[f"step-{project_id}"] = "test"
+
+    app.run()
+
+    assert not app.exception
+    assert any("Handbook Answers" in item.value for item in app.markdown)
+    assert any("Ask a workplace-policy question." in item.value for item in app.markdown)
+    assert app.text_input[0].label == "Ask a question"
+
+
+def test_synthetic_advisor_reference_has_participant_visible_build_and_test(monkeypatch):
+    service = build_service()
+    monkeypatch.setattr(home, "_service", lambda: service)
+    app = AppTest.from_file("streamlit_app.py").run()
+
+    button(app, "Build Synthetic Eligibility Advisor").click().run()
+
+    assert not app.exception
+    project = service.list_my_projects()[0]
+    assert project.metadata["template"] == "ELIGIBILITY_RECOMMENDATION_ADVISOR"
+    assert project.current_version_id
+    assert any("does not predict real admission" in item.value for item in app.warning)
+    assert {"GPA", "Target program"} <= {item.label for item in [*app.number_input, *app.selectbox]}
+    assert {"Run Behavioral Evaluation", "Test Advisor"} <= {item.label for item in app.button}

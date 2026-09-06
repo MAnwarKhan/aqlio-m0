@@ -58,7 +58,8 @@ def prepare_project(service: M0Service, name: str = "Handbook Assistant") -> tup
 
 def deploy_project(service: M0Service) -> tuple[str, str]:
     project_id, _asset_id = prepare_project(service)
-    service.ask_question(project_id, "When is annual leave available?", guided=True)
+    answer = service.ask_question(project_id, "When is annual leave available?", guided=True)
+    service.confirm_test_success(project_id, answer.correlation_id)
     service.confirm_readiness(project_id)
     publication = service.deploy(project_id, idempotency_key=f"deploy-{project_id}")
     return project_id, publication.id

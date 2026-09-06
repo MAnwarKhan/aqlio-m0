@@ -29,10 +29,17 @@ The default development configuration uses deterministic authentication, local i
 2. Describe an idea; optionally evaluate it, then define a small first solution.
 3. Start building with the document-assistant template. Selecting PDF, DOCX, or TXT files
    automatically adds and prepares them; failures show a retry action.
-4. Test answers with sources. Improve answer length or add better source documents and retest.
-5. After a successful test, choose Test Again, Improve, Run Application, or Publish Application.
-6. Publish a private snapshot in one action; explicitly enable sharing and revoke it when desired.
-7. Return through My Projects or start another independent project.
+4. Test answers with sources and confirm whether each answer worked. Incorrect answers carry
+   participant feedback into Improve and do not count as successful tests.
+5. Review and apply supported answer guidance or a Concise/Balanced/Detailed style. Controlled
+   look-and-experience changes include title, instructions, question placement, answer layout,
+   source presentation, and display detail. Unsupported requests are explained honestly.
+6. See the updated Working Version immediately, retest it, and run it after confirming success.
+7. Review and explicitly approve the exact successfully tested Working Version. Approval creates
+   an immutable snapshot and does not publish, export, or deploy it.
+8. Choose Run in Aqlio, Publish in Aqlio, or Get My Application Code. Export builds a private,
+   version-specific standalone ZIP from the Approved Version and excludes source documents.
+9. Return through My Projects or start another independent project.
 
 All authoritative state flows through application/domain/repository boundaries. Streamlit session
 state holds only transient navigation, upload-attempt suppression, and display conveniences.
@@ -62,4 +69,8 @@ Streamlit UI remains thin. Domain rules do not import Streamlit or vendors. Auth
 
 Managed mode requires `OPENAI_API_KEY`, `OPENAI_GENERATION_MODEL`, and `OPENAI_EMBEDDING_MODEL`. Pricing inputs are configuration metadata rather than embedded commercial assumptions. Live tests are disabled unless explicitly enabled and are protected by call and estimated-cost caps.
 
-Participant-facing Publish means freezing and publishing an immutable assistant version inside Aqlio—not provisioning infrastructure.
+Participant-facing Publish means freezing and publishing an immutable assistant version inside
+Aqlio—not provisioning infrastructure. Existing publications do not change when the Working
+Version's look and experience changes. Export does not commercially deploy the application;
+independent runtime validation is reproducible with `scripts/validate_export_runtime.py`. Railway
+provisioning and real-provider validation remain deferred.
