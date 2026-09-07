@@ -83,3 +83,58 @@ def test_summary_and_comparison_use_task_appropriate_structure() -> None:
         "- Premium plan includes phone support.",
     ]
     assert len(comparison.citations) == 2
+
+
+def test_question_echo_is_not_evidence_and_wrapped_missing_fact_is_preserved():
+    from dataclasses import replace
+
+    evidence = [
+        replace(
+            context("study.pdf", "question", "What is Seabrook's exact correlation coefficient?"),
+            page_number=1,
+        ),
+        replace(
+            context(
+                "study.pdf", "fact", "Seabrook does not report an exact correlation\ncoefficient."
+            ),
+            page_number=7,
+        ),
+    ]
+    result = grounded_fake_answer("What is Seabrook's exact correlation coefficient?", evidence)
+    assert result.answer == "Seabrook does not report an exact correlation coefficient."
+    assert result.citations[0].page_number == 7
+    assert grounded_fake_answer(
+        "What is Seabrook's exact correlation coefficient?", evidence[:1]
+    ).abstained
+
+
+def test_cedar_explanation_keeps_neighboring_calculation():
+    from dataclasses import replace
+
+    evidence = [
+        replace(
+            context(
+                "stats.pdf",
+                "formula",
+                "Cedar-7 sample variance uses n \u2212 1.\nSquared deviations total 48.",
+            ),
+            page_number=2,
+        ),
+        replace(
+            context(
+                "stats.pdf", "calculation", "Treat the seven values as a sample: 48 / 6 = 8 min²."
+            ),
+            document_id="doc-formula",
+            page_number=2,
+        ),
+        replace(
+            context("stats.pdf", "key", "What is Cedar-7's sample variance, and why divide by 6?"),
+            page_number=7,
+        ),
+    ]
+    result = grounded_fake_answer(
+        "What is Cedar-7's sample variance, and why divide by 6? Please cite the page.", evidence
+    )
+    assert "48 / 6 = 8 min²" in result.answer
+    assert "n \u2212 1" in result.answer
+    assert {citation.page_number for citation in result.citations} == {2}

@@ -55,6 +55,7 @@ def grounded_fake_answer(question: str, context: Sequence[RetrievedContext]) -> 
     """Produce a responsive deterministic answer instead of surfacing retrieval text."""
     if not context:
         return _abstention()
+    question = re.sub(r"\b(?:please\s+)?cite\b.*$", "", question, flags=re.IGNORECASE)
     intent = _intent(question)
     focus = _terms(question) - _STOPWORDS - _LIST_TERMS - _SUMMARY_TERMS - _COMPARISON_TERMS
     units = [
@@ -62,10 +63,10 @@ def grounded_fake_answer(question: str, context: Sequence[RetrievedContext]) -> 
         for item in context
         for text in _units(item.text)
     ]
-    responsive = [unit for unit in units if unit.score > 0]
+    responsive = [unit for unit in units if unit.score > 0 and "?" not in unit.text]
     if not responsive:
         return _abstention()
-    responsive.sort(key=lambda unit: -unit.score)
+    responsive.sort(key=lambda unit: (-unit.score, len(unit.text.split())))
     if intent == "list":
         answer_units = _list_answer_units(responsive)
         answer = "\n".join(f"- {text}" for text, _context in answer_units)
@@ -77,8 +78,26 @@ def grounded_fake_answer(question: str, context: Sequence[RetrievedContext]) -> 
         answer = "\n".join(f"- {text}" for text, _context in answer_units)
     else:
         best = responsive[0]
-        answer_units = [(best.text, best.context)]
-        answer = best.text
+        if "why" in _terms(question):
+            # Explanations often span sentences/table rows and neighboring chunks.
+            selected = (
+                [
+                    item
+                    for item in context
+                    if item.document_id == best.context.document_id
+                    and item.page_number == best.context.page_number
+                ]
+                if best.context.page_number is not None
+                else [best.context]
+            )
+            selected = selected[selected.index(best.context) :][:2]
+            passage = " ".join(
+                text for text in _units(" ".join(item.text for item in selected)) if "?" not in text
+            )
+            answer_units = [(passage, item) for item in selected]
+        else:
+            answer_units = [(best.text, best.context)]
+        answer = " ".join(dict.fromkeys(text for text, _context in answer_units))
     if not answer.strip() or not answer_units:
         return _abstention()
     used = {item.chunk_id: item for _text, item in answer_units}
@@ -121,6 +140,8 @@ def _terms(text: str) -> set[str]:
 
 def _units(text: str) -> list[str]:
     units: list[str] = []
+    # PDF visual line breaks are not sentence boundaries. Preserve actual lists.
+    text = re.sub(r"(?<![.!?:])\n(?!\s*(?:[-*•]|\d+[.)])\s)", " ", text)
     for line in text.splitlines():
         clean = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", line).strip()
         if clean:

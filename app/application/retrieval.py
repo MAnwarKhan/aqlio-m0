@@ -22,4 +22,4 @@ def with_neighbors[T: (DocumentChunk, PublishedChunk)](
             neighbor = by_position.get((chunk.asset_id, chunk.position + offset))
             if neighbor is not None and neighbor.page_number == chunk.page_number:
                 selected[(neighbor.asset_id, neighbor.position)] = neighbor
-    return list(selected.values())
+    return sorted(selected.values(), key=lambda chunk: (chunk.asset_id, chunk.position))

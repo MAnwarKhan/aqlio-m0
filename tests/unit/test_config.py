@@ -48,3 +48,9 @@ def test_managed_mode_fails_closed_without_provider_configuration(
 
     with pytest.raises(SettingsError, match="OPENAI_API_KEY"):
         Settings.from_env()
+
+
+def test_key_alone_does_not_enable_paid_calls(monkeypatch):
+    monkeypatch.delenv("AQLIO_AI_MODE", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-placeholder-not-a-real-key")
+    assert Settings.from_env().ai_mode == "fake"

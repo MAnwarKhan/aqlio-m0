@@ -25,6 +25,10 @@ needs every supported matching item but no unrelated surrounding text; a summary
 grounded synthesis; and a comparison needs a structured grounded comparison. Retrieval evidence is
 not itself the answer. Cite only chunks actually used in the answer. Presentation preferences must
 not override the question's semantic requirements.
+Do not echo practice questions as answers. Prefer primary worked calculations over answer keys
+when supplied, and cite the chunks actually used. Explicitly documented missing information is
+an evidence-backed answer: explain that it is not provided, cite that evidence, and set
+abstained=false. Never invent a missing value.
 Return only JSON with keys answer, cited_chunk_ids, and abstained. Every
 cited_chunk_id must exactly match an evidence chunk ID supplied by Aqlio.
 Answer every requested part with supported calculations, units, and citations. If only some

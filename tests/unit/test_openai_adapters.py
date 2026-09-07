@@ -251,3 +251,47 @@ def test_answer_preferences_and_page_metadata_reach_managed_generation():
     assert "every requested part" in instructions
     assert "PAGE=2" in payload
     assert "Use only supplied PAGE metadata" in instructions
+
+
+@pytest.mark.parametrize(
+    ("question", "answer", "page"),
+    [
+        ("Cedar-7 sample variance?", "48 / 6 = 8 min²; n \u2212 1 = 6 for seven sample values.", 2),
+        ("Seabrook exact correlation?", "The exact correlation coefficient is not provided.", 7),
+    ],
+)
+def test_statistics_response_contract(question, answer, page):
+    import json
+
+    client = generation_client(
+        SimpleNamespace(
+            output_text=json.dumps(
+                {
+                    "answer": answer,
+                    "cited_chunk_ids": ["evidence"],
+                    "abstained": False,
+                }
+            )
+        )
+    )
+    adapter = OpenAIGenerationAdapter(
+        api_key="unused",
+        model="configured-model",
+        timeout_seconds=5,
+        max_retries=0,
+        client=client,
+    )
+    result = adapter.generate(
+        GenerationRequest(
+            question,
+            [
+                RetrievedContext("asset", "stats.pdf", "evidence", answer, page),
+            ],
+        )
+    )
+    assert result.answer == answer
+    assert result.citations[0].page_number == page
+    assert f"PAGE={page}" in client.responses.kwargs["input"]
+    assert answer in client.responses.kwargs["input"]
+    assert "Prefer primary worked calculations" in client.responses.kwargs["instructions"]
+    assert "Never invent a missing value" in client.responses.kwargs["instructions"]

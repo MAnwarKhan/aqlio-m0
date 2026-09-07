@@ -1344,7 +1344,13 @@ class M0Service:
 
     @classmethod
     def _question_terms(cls, question: str) -> set[str]:
-        return {term for term in cls._normalized_terms(question) if term not in _STOPWORDS}
+        # Citation instructions are presentation requests, not document subject matter.
+        subject = re.sub(r"\b(?:please\s+)?cite\b.*$", "", question, flags=re.IGNORECASE)
+        return {
+            term
+            for term in cls._normalized_terms(subject)
+            if term not in _STOPWORDS | {"why", "where", "found", "information"}
+        }
 
     @classmethod
     def _is_complete_request(cls, question: str) -> bool:
