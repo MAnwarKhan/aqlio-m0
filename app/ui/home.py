@@ -449,10 +449,10 @@ def _render_answer(answer: Answer, ui_config: dict[str, str] | None = None) -> N
             st.write(answer.text)
         st.markdown("**Sources**")
         if ui_config.get("citation_presentation") == "compact":
-            st.caption(", ".join(dict.fromkeys(item.document_name for item in answer.citations)))
+            st.caption(", ".join(dict.fromkeys(item.source_label for item in answer.citations)))
         else:
             for citation in answer.citations:
-                st.text(f"{citation.document_name} — source passage")
+                st.text(citation.source_label)
 
 
 def _render_behavioral_evaluation(
@@ -492,6 +492,11 @@ def _render_improve(service: M0Service, project_id: str) -> None:
         "until you publish a new version."
     )
     st.write("Describe how answers should improve, then review the change before applying it.")
+    if service.settings.ai_mode == "fake":
+        st.info(
+            "This demo selects source excerpts. Answer preferences are saved, but their effect "
+            "on live answers requires live AI to be enabled by the app owner."
+        )
     proposal_key = f"improvement-proposal-{project_id}-{project.current_version_id}"
     applied_key = f"improvement-applied-{project_id}"
     current_version = service.repository.get_version(project.current_version_id or "")
@@ -872,7 +877,7 @@ def _render_shared(service: M0Service, token: str) -> None:
                 st.write(answer.text)
                 st.markdown("**Sources**")
                 for citation in answer.citations:
-                    st.write(f"- {citation.document_name} — source passage")
+                    st.text(citation.source_label)
         except (AqlioError, ProviderCallError) as exc:
             st.error(str(exc))
 

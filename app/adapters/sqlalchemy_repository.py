@@ -215,6 +215,7 @@ class SQLAlchemyM0Repository:
                     status=asset.status.value,
                     participant_message=asset.participant_message,
                     normalized_text=asset.normalized_text,
+                    page_texts=list(asset.page_texts),
                     created_at=asset.created_at or datetime.now(UTC),
                 )
             )
@@ -311,6 +312,7 @@ class SQLAlchemyM0Repository:
                         project_version_id=chunk.project_version_id,
                         asset_id=chunk.asset_id,
                         source_name=chunk.source_name,
+                        page_number=chunk.page_number,
                         position=chunk.position,
                         text=chunk.text,
                         embedding_bytes=json.dumps(chunk.embedding).encode(),
@@ -339,6 +341,7 @@ class SQLAlchemyM0Repository:
                     row.position,
                     row.text,
                     tuple(json.loads(row.embedding_bytes.decode())),
+                    row.page_number,
                 )
                 for row in rows
             ]
@@ -573,6 +576,7 @@ class SQLAlchemyM0Repository:
                         publication_id=publication.id,
                         asset_id=chunk.asset_id,
                         source_name=chunk.source_name,
+                        page_number=chunk.page_number,
                         position=chunk.position,
                         text=chunk.text,
                     )
@@ -809,6 +813,7 @@ class SQLAlchemyM0Repository:
             row.participant_message,
             row.normalized_text,
             row.created_at,
+            tuple(row.page_texts or ()),
         )
 
     def _publication(self, session: Session, row: PublicationRow) -> Publication:
@@ -820,7 +825,9 @@ class SQLAlchemyM0Repository:
             ).all()
         )
         chunks = tuple(
-            PublishedChunk(chunk.asset_id, chunk.source_name, chunk.position, chunk.text)
+            PublishedChunk(
+                chunk.asset_id, chunk.source_name, chunk.position, chunk.text, chunk.page_number
+            )
             for chunk in session.scalars(
                 select(PublicationChunkRow).where(PublicationChunkRow.publication_id == row.id)
             ).all()

@@ -54,6 +54,7 @@ class RetrievedContext:
     document_name: str
     chunk_id: str
     text: str
+    page_number: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +83,12 @@ class ProviderUsage:
 class Citation:
     document_name: str
     chunk_id: str
+    page_number: int | None = None
+
+    @property
+    def source_label(self) -> str:
+        locator = f"page {self.page_number}" if self.page_number is not None else "source passage"
+        return f"{self.document_name} — {locator}"
 
 
 @dataclass(frozen=True, slots=True)

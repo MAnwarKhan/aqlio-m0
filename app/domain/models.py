@@ -95,6 +95,7 @@ class Asset:
     participant_message: str | None = None
     normalized_text: str | None = None
     created_at: datetime | None = None
+    page_texts: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +109,7 @@ class DocumentChunk:
     position: int
     text: str
     embedding: tuple[float, ...]
+    page_number: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,6 +188,7 @@ class PublishedChunk:
     source_name: str
     position: int
     text: str
+    page_number: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
