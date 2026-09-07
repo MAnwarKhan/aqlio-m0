@@ -158,7 +158,8 @@ def evaluate_behavioral_specification(
             "Summary conformance case retained both relevant facts.",
         ),
         "AC-COMPARE-001": (
-            comparison.answer.count("\n") == 1
+            not comparison.abstained
+            and len(comparison.citations) == 2
             and "email support" in comparison.answer
             and "phone support" in comparison.answer,
             "Comparison conformance case produced structured supported differences.",

@@ -75,6 +75,7 @@ from app.ports.contracts import (
     ProviderUsage,
     RetrievedContext,
 )
+from app.question_answering import substantive_question
 
 _STOPWORDS = {
     "a",
@@ -1345,7 +1346,7 @@ class M0Service:
     @classmethod
     def _question_terms(cls, question: str) -> set[str]:
         # Citation instructions are presentation requests, not document subject matter.
-        subject = re.sub(r"\b(?:please\s+)?cite\b.*$", "", question, flags=re.IGNORECASE)
+        subject = substantive_question(question)
         return {
             term
             for term in cls._normalized_terms(subject)

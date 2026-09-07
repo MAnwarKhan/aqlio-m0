@@ -451,8 +451,8 @@ def _render_answer(answer: Answer, ui_config: dict[str, str] | None = None) -> N
         if ui_config.get("citation_presentation") == "compact":
             st.caption(", ".join(dict.fromkeys(item.source_label for item in answer.citations)))
         else:
-            for citation in answer.citations:
-                st.text(citation.source_label)
+            for label in dict.fromkeys(item.source_label for item in answer.citations):
+                st.text(label)
 
 
 def _render_behavioral_evaluation(
@@ -876,8 +876,8 @@ def _render_shared(service: M0Service, token: str) -> None:
             else:
                 st.write(answer.text)
                 st.markdown("**Sources**")
-                for citation in answer.citations:
-                    st.text(citation.source_label)
+                for label in dict.fromkeys(item.source_label for item in answer.citations):
+                    st.text(label)
         except (AqlioError, ProviderCallError) as exc:
             st.error(str(exc))
 

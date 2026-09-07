@@ -78,10 +78,9 @@ def test_summary_and_comparison_use_task_appropriate_structure() -> None:
     assert summary.answer == (
         "Basic plan includes email support. Premium plan includes phone support."
     )
-    assert comparison.answer.splitlines() == [
-        "- Basic plan includes email support.",
-        "- Premium plan includes phone support.",
-    ]
+    assert comparison.answer == (
+        "Basic plan includes email support. Premium plan includes phone support."
+    )
     assert len(comparison.citations) == 2
 
 
@@ -138,3 +137,41 @@ def test_cedar_explanation_keeps_neighboring_calculation():
     assert "48 / 6 = 8 min²" in result.answer
     assert "n \u2212 1" in result.answer
     assert {citation.page_number for citation in result.citations} == {2}
+
+
+def test_comparison_needs_both_subjects_and_ignores_headings():
+    evidence = [
+        context("guide.txt", "index", "Basic and Premium support\nOther topics."),
+        context("guide.txt", "basic", "Basic plan includes email support."),
+    ]
+    result = grounded_fake_answer("Compare Basic versus Premium support.", evidence)
+    assert result.abstained and not result.citations
+
+
+def test_presentation_removal_preserves_question_after_citation_request():
+    from app.question_answering import substantive_question
+
+    question = "Please cite the page. What is the difference between Basic and Premium?"
+    assert "difference between Basic and Premium" in substantive_question(question)
+    assert substantive_question("What does the document say about sentence length?") == (
+        "What does the document say about sentence length?"
+    )
+
+
+def test_expanded_sources_consolidate_pages_without_losing_chunk_provenance(monkeypatch):
+    from app.application.m0_service import Answer
+    from app.ports.contracts import Citation
+    from app.ui import home
+
+    labels = []
+    monkeypatch.setattr(home.st, "text", labels.append)
+    monkeypatch.setattr(home.st, "write", lambda *_: None)
+    monkeypatch.setattr(home.st, "markdown", lambda *_: None)
+    citations = (
+        Citation("notes.pdf", "a", 2),
+        Citation("notes.pdf", "b", 2),
+        Citation("notes.pdf", "c", 3),
+    )
+    home._render_answer(Answer("Supported answer.", citations, False, "test"))
+    assert labels == [citations[0].source_label, citations[2].source_label]
+    assert len(citations) == 3

@@ -51,17 +51,87 @@ class _Unit:
     score: int
 
 
+def substantive_question(question: str) -> str:
+    """Remove bounded presentation clauses without discarding the information need."""
+    subject = re.sub(
+        r"\baccording to (?:the |this |provided |supplied )?documents?\s*,?\s*",
+        "",
+        question,
+        flags=re.IGNORECASE,
+    )
+    subject = re.sub(
+        r"\b(?:please\s+)?(?:answer|respond)(?:\s+in)?\s+"
+        r"(?:\d+|one|two|three)(?:\s*[-\u2013\u2014]\s*(?:\d+|one|two|three))?"
+        r"\s+sentences?\b",
+        "",
+        subject,
+        flags=re.IGNORECASE,
+    )
+    subject = re.sub(
+        r"\b(?:please\s+)?cite\s+(?:the |a |your )?"
+        r"(?:pages?|sources?)(?:\s+where you found (?:the )?information)?\b",
+        "",
+        subject,
+        flags=re.IGNORECASE,
+    )
+    return subject.strip(" ,.;")
+
+
+def _comparison_units(question: str, units: Sequence[_Unit]) -> list[tuple[str, RetrievedContext]]:
+    # Identify both subjects, then select a declarative sentence led by each subject.
+    # Headings, indexes, exercises, and incidental mentions are not definitions.
+    match = re.search(
+        r"(?:between|compare|comparison of)\s+(.+?)\s+"
+        r"(?:and|versus|vs\.?)\s+(.+?)(?:[?.!]|$)",
+        question,
+        re.IGNORECASE,
+    )
+    if not match:
+        return []
+    output: list[tuple[str, RetrievedContext]] = []
+    for subject in match.groups():
+        words = subject.strip().split()
+        candidates = []
+        # A trailing shared attribute (e.g. 'Basic versus Premium support') is optional.
+        for length in range(len(words), 0, -1):
+            prefix = r"^(?:The\s+)?" + r"\s+".join(re.escape(w) for w in words[:length])
+            candidates = [
+                unit
+                for unit in units
+                if re.search(
+                    prefix + r"(?:\s+\w+){0,2}\s+(?:is|are|has|have|uses?|includes?|"
+                    r"measures?|averages?|means?|expresses?|provides?|costs?)\b",
+                    unit.text,
+                    re.IGNORECASE,
+                )
+                and unit.text.endswith((".", "!"))
+            ]
+            if candidates:
+                break
+        if not candidates:
+            return []
+        best = candidates[0]
+        output.append((best.text, best.context))
+    return list(dict.fromkeys(output))
+
+
 def grounded_fake_answer(question: str, context: Sequence[RetrievedContext]) -> GenerationResponse:
     """Produce a responsive deterministic answer instead of surfacing retrieval text."""
     if not context:
         return _abstention()
-    question = re.sub(r"\b(?:please\s+)?cite\b.*$", "", question, flags=re.IGNORECASE)
+    question = substantive_question(question)
     intent = _intent(question)
     focus = _terms(question) - _STOPWORDS - _LIST_TERMS - _SUMMARY_TERMS - _COMPARISON_TERMS
     units = [
         _Unit(text, item, len(focus & _terms(text)))
         for item in context
-        for text in _units(item.text)
+        for text in _units(
+            "\n".join(
+                line for line in item.text.splitlines() if not (_terms(line) - _STOPWORDS) <= focus
+            )
+            if intent == "comparison"
+            else item.text
+        )
     ]
     responsive = [unit for unit in units if unit.score > 0 and "?" not in unit.text]
     if not responsive:
@@ -74,8 +144,8 @@ def grounded_fake_answer(question: str, context: Sequence[RetrievedContext]) -> 
         answer_units = [(unit.text, unit.context) for unit in responsive[:4]]
         answer = " ".join(text for text, _context in answer_units)
     elif intent == "comparison":
-        answer_units = [(unit.text, unit.context) for unit in responsive[:6]]
-        answer = "\n".join(f"- {text}" for text, _context in answer_units)
+        answer_units = _comparison_units(question, units)
+        answer = " ".join(text for text, _context in answer_units)
     else:
         best = responsive[0]
         if "why" in _terms(question):
