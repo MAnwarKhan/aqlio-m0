@@ -84,7 +84,9 @@ def grounded_fake_answer(question: str, context: Sequence[RetrievedContext]) -> 
     used = {item.chunk_id: item for _text, item in answer_units}
     return GenerationResponse(
         answer,
-        tuple(Citation(item.document_name, item.chunk_id) for item in used.values()),
+        tuple(
+            Citation(item.document_name, item.chunk_id, item.page_number) for item in used.values()
+        ),
     )
 
 

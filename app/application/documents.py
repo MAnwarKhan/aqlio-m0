@@ -70,9 +70,7 @@ def extract_text(filename: str, content: bytes) -> str:
             document = Document(io.BytesIO(content))
             text = "\n".join(paragraph.text for paragraph in document.paragraphs)
         elif extension == "pdf":
-            reader = PdfReader(io.BytesIO(content))
-            text = "\n".join(page.extract_text() or "" for page in reader.pages)
-            text = normalize_pdf_text(text)
+            text = "\n".join(extract_pdf_pages(content))
         else:
             raise PreparationError(
                 "We couldn't prepare this document. Add a PDF, DOCX, or TXT file."
@@ -87,6 +85,22 @@ def extract_text(filename: str, content: bytes) -> str:
     if not normalized:
         raise PreparationError("We couldn't find usable text in this document.")
     return normalized
+
+
+def extract_pdf_pages(content: bytes) -> tuple[str, ...]:
+    """Keep physical PDF page positions, including blank pages, as trusted metadata."""
+    try:
+        reader = PdfReader(io.BytesIO(content))
+        pages = tuple(
+            normalize_text(normalize_pdf_text(page.extract_text() or "")) for page in reader.pages
+        )
+    except Exception as exc:
+        raise PreparationError(
+            "We couldn't read this document. Check the file and try again."
+        ) from exc
+    if not any(pages):
+        raise PreparationError("We couldn't find usable text in this document.")
+    return pages
 
 
 def normalize_pdf_text(text: str) -> str:

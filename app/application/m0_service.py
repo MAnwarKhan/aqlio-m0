@@ -11,6 +11,7 @@ from functools import wraps
 from app.application.advisor_workflow import AdvisorWorkflowService
 from app.application.documents import (
     chunk_text,
+    extract_pdf_pages,
     extract_text,
     remove_untrusted_instruction_chunks,
     validate_document,
@@ -27,6 +28,7 @@ from app.application.errors import (
 )
 from app.application.export_builder import build_export
 from app.application.lifecycle_coordinator import LifecycleCoordinator
+from app.application.retrieval import with_neighbors
 from app.application.specification_lifecycle import default_specification_registry
 from app.config import Settings
 from app.domain import (
@@ -830,8 +832,12 @@ class M0Service:
                 raise PreparationError(
                     "We couldn't access this document. Add it again and try again."
                 ) from exc
-            normalized = extract_text(asset.original_name, content)
-            asset.normalized_text = normalized
+            if asset.media_type == "application/pdf":
+                asset.page_texts = extract_pdf_pages(content)
+                asset.normalized_text = "\n".join(asset.page_texts)
+            else:
+                asset.normalized_text = extract_text(asset.original_name, content)
+                asset.page_texts = ()
             asset.status = AssetStatus.READY
             asset.participant_message = "Ready"
             self.repository.save_asset(asset)
@@ -989,7 +995,9 @@ class M0Service:
             assistant_config=version.assistant_config,
             asset_ids=version.asset_ids,
             chunks=tuple(
-                PublishedChunk(chunk.asset_id, chunk.source_name, chunk.position, chunk.text)
+                PublishedChunk(
+                    chunk.asset_id, chunk.source_name, chunk.position, chunk.text, chunk.page_number
+                )
                 for chunk in chunks
             ),
         )
@@ -1175,9 +1183,17 @@ class M0Service:
         )
         prepared_chunks: dict[str, list[DocumentChunk]] = {}
         for asset in ready_assets:
-            raw_chunks = chunk_text(
-                asset.normalized_text or "", max_words=self.settings.chunk_max_words
+            sections: list[tuple[int | None, str]] = (
+                [(number, text) for number, text in enumerate(asset.page_texts, start=1)]
+                if asset.page_texts
+                else [(None, asset.normalized_text or "")]
             )
+            located_chunks = [
+                (page, text)
+                for page, section in sections
+                for text in chunk_text(section, max_words=self.settings.chunk_max_words)
+            ]
+            raw_chunks = [text for _page, text in located_chunks]
             correlation_id = self.ids.new_id()
             if self.settings.ai_mode == "managed" and not self._has_allowance(
                 self.auth.current_user().id
@@ -1216,6 +1232,7 @@ class M0Service:
                     position=index + 1,
                     text=text,
                     embedding=tuple(vector),
+                    page_number=located_chunks[index][0],
                 )
                 for index, (text, vector) in enumerate(zip(raw_chunks, vectors, strict=True))
             ]
@@ -1259,12 +1276,16 @@ class M0Service:
                 key=lambda chunk: (chunk.source_name, chunk.position),
             )[:12]
             return [
-                RetrievedContext(chunk.asset_id, chunk.source_name, chunk.id, chunk.text)
+                RetrievedContext(
+                    chunk.asset_id, chunk.source_name, chunk.id, chunk.text, chunk.page_number
+                )
                 for chunk in complete_chunks
             ]
         return [
-            RetrievedContext(chunk.asset_id, chunk.source_name, chunk.id, chunk.text)
-            for _score, chunk in scored[:3]
+            RetrievedContext(
+                chunk.asset_id, chunk.source_name, chunk.id, chunk.text, chunk.page_number
+            )
+            for chunk in with_neighbors([chunk for _score, chunk in scored[:3]], candidates)
         ]
 
     def _retrieve_publication(
@@ -1293,13 +1314,14 @@ class M0Service:
                 if chunk.asset_id in matched_assets and chunk.text in safe_texts
             ][:12]
         else:
-            selected = [chunk for _score, chunk in scored[:3]]
+            selected = with_neighbors([chunk for _score, chunk in scored[:3]], publication.chunks)
         return [
             RetrievedContext(
                 chunk.asset_id,
                 chunk.source_name,
                 f"published:{chunk.asset_id}:{chunk.position}",
                 chunk.text,
+                chunk.page_number,
             )
             for chunk in selected
         ]

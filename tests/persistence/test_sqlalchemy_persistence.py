@@ -360,3 +360,28 @@ def test_legacy_approval_without_snapshotted_validation_remains_readable(
     assert reconstructed.specification == approved.specification
     assert reconstructed.approved_at == approved.approved_at
     assert reconstructed.participant_validation is None
+
+
+def test_page_migration_restart_and_legacy_publication(tmp_path, monkeypatch):
+    from tests.integration.test_page_citations import publish, sample_pdf
+
+    pages = sample_pdf(monkeypatch)
+    url = f"sqlite:///{tmp_path / 'pages.db'}"
+    migrate(url, monkeypatch)
+    service = service_for(url, tmp_path / "files")
+    project = service.create_project("PDF pages")
+    asset = service.add_and_prepare_document(project.id, "notes.pdf", b"%PDF-stub")
+    publication = publish(service, project.id, "Cedar mean")
+    receipt = service.enable_link_sharing(publication.id)
+    restarted = service_for(url, tmp_path / "files")
+    assert restarted.repository.get_asset(asset.id).page_texts == tuple(pages)
+    assert restarted.ask_question(project.id, "Cedar mean").citations[0].page_number == 3
+    assert restarted.ask_shared(receipt.token, "Cedar mean").citations[0].page_number == 3
+    config = Config("alembic.ini")
+    command.downgrade(config, "20260906_0007")
+    command.upgrade(config, "head")
+    restarted = service_for(url, tmp_path / "files")
+    assert restarted.ask_shared(receipt.token, "Cedar mean").citations[0].page_number is None
+    restarted.prepare_document(project.id, asset.id, refresh=True)
+    assert restarted.ask_question(project.id, "Cedar mean").citations[0].page_number == 3
+    assert restarted.ask_shared(receipt.token, "Cedar mean").citations[0].page_number is None

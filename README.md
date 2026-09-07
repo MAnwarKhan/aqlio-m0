@@ -74,3 +74,8 @@ Aqlio—not provisioning infrastructure. Existing publications do not change whe
 Version's look and experience changes. Export does not commercially deploy the application;
 independent runtime validation is reproducible with `scripts/validate_export_runtime.py`. Railway
 provisioning and real-provider validation remain deferred.
+
+## PDF page citations and answering update
+
+See [the answering fixes guide](docs/ANSWERING_FIXES.md) for staging integration, the additive
+page-locator migration, PDF refresh, and the separate live-AI activation requirement.

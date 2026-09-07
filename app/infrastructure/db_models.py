@@ -128,6 +128,7 @@ class AssetRow(Base):
     status: Mapped[str] = mapped_column(String(30), index=True)
     participant_message: Mapped[str | None] = mapped_column(String(500))
     normalized_text: Mapped[str | None] = mapped_column(Text)
+    page_texts: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     __table_args__ = (
         UniqueConstraint("project_id", "checksum", name="uq_asset_project_checksum"),
@@ -156,6 +157,7 @@ class DocumentChunkRow(Base):
     )
     asset_id: Mapped[str] = mapped_column(ForeignKey("assets.id", ondelete="CASCADE"), index=True)
     source_name: Mapped[str] = mapped_column(String(255))
+    page_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     position: Mapped[int] = mapped_column(Integer)
     text: Mapped[str] = mapped_column(Text)
     embedding_bytes: Mapped[bytes] = mapped_column(LargeBinary)
@@ -309,6 +311,7 @@ class PublicationChunkRow(Base):
     )
     asset_id: Mapped[str] = mapped_column(String(64))
     source_name: Mapped[str] = mapped_column(String(255))
+    page_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     position: Mapped[int] = mapped_column(Integer)
     text: Mapped[str] = mapped_column(Text)
 
